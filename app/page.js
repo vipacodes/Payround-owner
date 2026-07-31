@@ -36,10 +36,12 @@ export default function OwnerDashboard() {
   const handleLogin = (e) => {
     e.preventDefault();
     const email = emailInput.trim().toLowerCase();
+    const pass = passwordInput;
     if (!isOwnerEmail(email)) { setMsg('Access Denied - Only Vipadarapper@gmail.com and Payroundsupport@gmail.com'); return; }
+    if (pass !== 'B@$ik0r0') { setMsg('Incorrect owner password. Password is B@$ik0r0'); return; }
     const u = { email, name: email.split('@')[0] };
     localStorage.setItem('payround_owner_user', JSON.stringify(u));
-    setUser(u); setIsOwner(true); setMsg('Owner logged in'); loadAll();
+    setUser(u); setIsOwner(true); setMsg('Owner logged in - Password verified'); loadAll();
   };
 
   const handleLogout = () => { localStorage.removeItem('payround_owner_user'); setUser(null); setIsOwner(false); };
