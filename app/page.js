@@ -1,0 +1,205 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { supabase, OWNER_EMAILS, isOwnerEmail, DEFAULT_OWNER_SETTINGS, GROUP_COLORS } from '@/lib/supabase';
+
+export default function OwnerDashboard() {
+  const [user, setUser] = useState(null);
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isOwner, setIsOwner] = useState(false);
+  const [groups, setGroups] = useState([]);
+  const [ads, setAds] = useState([]);
+  const [receipts, setReceipts] = useState([]);
+  const [ownerSettings, setOwnerSettings] = useState(DEFAULT_OWNER_SETTINGS);
+  const [tab, setTab] = useState('groups');
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    const stored = localStorage.getItem('payround_owner_user');
+    if (stored) {
+      const u = JSON.parse(stored);
+      if (isOwnerEmail(u.email)) { setUser(u); setIsOwner(true); loadAll(); }
+    }
+  }, []);
+
+  const loadAll = async () => {
+    const { data: g } = await supabase.from('groups').select('*').order('created_at', { ascending: false });
+    if (g) setGroups(g);
+    const { data: a } = await supabase.from('ads').select('*').order('submitted_at', { ascending: false });
+    if (a) setAds(a);
+    const { data: r } = await supabase.from('member_receipts').select('*').order('uploaded_at', { ascending: false });
+    if (r) setReceipts(r);
+    const { data: s } = await supabase.from('owner_settings').select('*').eq('id', 1).single();
+    if (s) setOwnerSettings(s);
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const email = emailInput.trim().toLowerCase();
+    if (!isOwnerEmail(email)) { setMsg('Access Denied - Only Vipadarapper@gmail.com and Payroundsupport@gmail.com'); return; }
+    const u = { email, name: email.split('@')[0] };
+    localStorage.setItem('payround_owner_user', JSON.stringify(u));
+    setUser(u); setIsOwner(true); setMsg('Owner logged in'); loadAll();
+  };
+
+  const handleLogout = () => { localStorage.removeItem('payround_owner_user'); setUser(null); setIsOwner(false); };
+
+  const approveGroup = async (g) => {
+    const { error } = await supabase.from('groups').update({ status: 'active', is_verified: true }).eq('id', g.id);
+    if (!error) { setMsg(`Group ${g.name} approved - now active and searchable`); loadAll(); }
+  };
+  const rejectGroup = async (g) => {
+    const reason = prompt('Rejection reason?'); if (!reason) return;
+    await supabase.from('groups').update({ status: 'rejected', rejection_reason: reason }).eq('id', g.id);
+    setMsg(`Group ${g.name} rejected`); loadAll();
+  };
+  const unfreezeGroup = async (g) => {
+    const newExpiry = new Date(); newExpiry.setMonth(newExpiry.getMonth()+6);
+    await supabase.from('groups').update({ status: 'active', expiry_at: newExpiry.toISOString(), frozen_at: null, renewal_receipt_url: null }).eq('id', g.id);
+    setMsg(`Group ${g.name} unfrozen - 6 months renewal`); loadAll();
+  };
+  const approveAd = async (ad) => {
+    const exp = new Date(); exp.setDate(exp.getDate()+ad.duration_days);
+    await supabase.from('ads').update({ status: 'approved', approved_at: new Date().toISOString(), expires_at: exp.toISOString() }).eq('id', ad.id);
+    setMsg(`Ad ${ad.business_name} approved for ${ad.duration_days} days`); loadAll();
+  };
+  const saveSettings = async () => {
+    await supabase.from('owner_settings').upsert({ id: 1, ...ownerSettings, updated_at: new Date().toISOString() });
+    setMsg('Owner settings saved - bank details updated, reflects on user site instantly');
+  };
+
+  const pendingGroups = groups.filter(g => g.status === 'pending_owner');
+  const frozenGroups = groups.filter(g => g.status === 'frozen' || g.status === 'pending_renewal' || g.status === 'trial_frozen');
+  const pendingAds = ads.filter(a => a.status === 'pending');
+
+  if (!isOwner) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-8 max-w-md w-full">
+          <div className="text-center mb-6"><div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center mx-auto mb-4 text-white font-bold text-2xl">P</div><h1 className="text-2xl font-bold">PayRound Owner</h1><p className="text-sm text-gray-500 mt-1">Separate owner site - controls user site payround-omega.vercel.app</p><p className="text-xs text-amber-600 mt-2">Only Vipadarapper@gmail.com & Payroundsupport@gmail.com</p></div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <input value={emailInput} onChange={e=>setEmailInput(e.target.value)} placeholder="Owner Email" type="email" className="w-full border rounded-xl px-4 py-3 text-sm" />
+            <input value={passwordInput} onChange={e=>setPasswordInput(e.target.value)} placeholder="Password (any for demo)" type="password" className="w-full border rounded-xl px-4 py-3 text-sm" />
+            <button className="w-full bg-black text-white py-3 rounded-xl font-bold">Login as Owner</button>
+          </form>
+          {msg && <div className="mt-4 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">{msg}</div>}
+          <div className="mt-6 text-xs text-gray-500 bg-gray-50 rounded-xl p-3">
+            <div className="font-bold">Shared DB:</div><div className="mt-1">Supabase: biqutnjvhkvldrihywdb.supabase.co</div><div>Both user site & owner site share same DB. Approve here → reflects in user site instantly.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3"><div className="w-9 h-9 bg-black rounded-xl flex items-center justify-center text-white font-bold">P</div><div><div className="font-bold">PayRound Owner</div><div className="text-[10px] text-gray-500">Controls payround-omega.vercel.app • {ownerSettings.account_number} Palmpay</div></div></div>
+          <div className="flex items-center gap-3"><span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">{user.email}</span><button onClick={handleLogout} className="text-xs underline">Logout</button><a href="https://payround-omega.vercel.app" target="_blank" className="bg-black text-white px-4 py-2 rounded-full text-xs">View User Site</a></div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold">Owner Dashboard 👑</h1>
+          <div className="text-xs text-gray-500">Total Groups: {groups.length} | Pending: {pendingGroups.length} | Frozen: {frozenGroups.length} | Ads Pending: {pendingAds.length}</div>
+        </div>
+
+        {msg && <div className="bg-green-50 border border-green-200 text-green-800 rounded-xl p-3 text-sm mb-4">{msg}</div>}
+
+        <div className="flex flex-wrap gap-2 mb-6 bg-white p-2 rounded-full border w-fit">
+          {[
+            {id:'groups', label:`Pending Groups (${pendingGroups.length})`},
+            {id:'frozen', label:`Frozen/Renewals (${frozenGroups.length})`},
+            {id:'ads', label:`Ads Review (${pendingAds.length})`},
+            {id:'receipts', label:`All Receipts (${receipts.length})`},
+            {id:'settings', label:'Bank Settings'},
+          ].map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} className={`px-4 py-2 rounded-full text-sm font-semibold ${tab===t.id?'bg-black text-white':'bg-gray-100'}`}>{t.label}</button>
+          ))}
+        </div>
+
+        {tab==='groups' && (
+          <div className="grid md:grid-cols-2 gap-4">
+            {pendingGroups.length===0 && <div className="col-span-2 bg-white border rounded-2xl p-12 text-center text-gray-500">No pending groups. When users pay ₦5000 to Palmpay {ownerSettings.account_number} + selfie+ID+receipt, they appear here. Details saved pending, not deleted.</div>}
+            {pendingGroups.map(g=>(
+              <div key={g.id} className="bg-white rounded-2xl border p-5">
+                <div className="flex justify-between"><span className="font-bold">{g.name} ({g.id}) <span className="w-3 h-3 rounded-full inline-block ml-1" style={{backgroundColor:g.color}} /></span><span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-1 rounded-full">PENDING OWNER</span></div>
+                <div className="text-sm text-gray-600 mt-1">{g.description}</div>
+                <div className="grid grid-cols-2 gap-2 mt-3 text-xs bg-gray-50 rounded-xl p-3"><div>Admin: {g.admin_email}</div><div>Amount: ₦{g.amount} {g.frequency}</div><div>Color: {g.color}</div><div>Max: {g.max_members}</div></div>
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  <div className="bg-gray-100 rounded-xl p-2 text-center text-xs">Selfie<br/>{g.selfie_url ? <img src={g.selfie_url} className="w-full h-20 object-cover rounded mt-1" /> : 'No selfie'}</div>
+                  <div className="bg-gray-100 rounded-xl p-2 text-center text-xs">ID {g.id_type}<br/>{g.id_url ? <img src={g.id_url} className="w-full h-20 object-cover rounded mt-1" /> : 'No ID'}</div>
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-2 text-center text-xs">Receipt ₦5000<br/>{g.creation_receipt_url ? <img src={g.creation_receipt_url} className="w-full h-20 object-cover rounded mt-1" /> : 'No receipt'}</div>
+                </div>
+                <div className="flex gap-2 mt-4"><button onClick={()=>approveGroup(g)} className="flex-1 bg-black text-white py-2.5 rounded-xl text-sm font-bold">Approve → Active</button><button onClick={()=>rejectGroup(g)} className="flex-1 bg-red-50 text-red-700 border py-2.5 rounded-xl text-sm">Reject</button></div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab==='frozen' && (
+          <div className="grid md:grid-cols-2 gap-4">
+            {frozenGroups.map(g=>(
+              <div key={g.id} className="bg-white rounded-2xl border p-5">
+                <div className="flex justify-between"><span className="font-bold">{g.name}</span><span className="text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded-full">FROZEN</span></div>
+                <div className="text-xs text-gray-600 mt-2">Admin {g.admin_email} • Expiry {g.expiry_at ? new Date(g.expiry_at).toLocaleDateString() : 'None'} • Frozen {g.frozen_at ? new Date(g.frozen_at).toLocaleDateString() : ''}</div>
+                {g.renewal_receipt_url && <div className="mt-3"><img src={g.renewal_receipt_url} className="w-full h-40 object-cover rounded-xl border" /></div>}
+                <div className="flex gap-2 mt-3"><button onClick={()=>unfreezeGroup(g)} className="flex-1 bg-black text-white py-2.5 rounded-xl text-sm font-bold">Approve Renewal & Unfreeze (6 months)</button></div>
+                <div className="text-[10px] text-gray-500 mt-2">When frozen: cannot edit, no contributions. Only Owner unfreeze. Trial frozen auto-deletes after 14 days if no pay.</div>
+              </div>
+            ))}
+            {frozenGroups.length===0 && <div className="col-span-2 bg-white border rounded-2xl p-12 text-center text-gray-500">No frozen groups. Groups freeze after 6 months + 7 days grace, or trial 7+7 days.</div>}
+          </div>
+        )}
+
+        {tab==='ads' && (
+          <div className="grid md:grid-cols-2 gap-4">
+            {pendingAds.map(ad=>(
+              <div key={ad.id} className="bg-white rounded-2xl border p-5">
+                <div className="font-bold">{ad.business_name} • {ad.duration_days}d • ₦{ad.price}</div>
+                <div className="text-sm text-gray-600 mt-1">{ad.description}</div>
+                <div className="grid grid-cols-2 gap-3 mt-3"><div><div className="text-xs font-bold">Ad Media</div><img src={ad.media_url} className="w-full h-32 object-cover rounded-xl border mt-1" /></div><div><div className="text-xs font-bold">Receipt</div><img src={ad.payment_receipt_url} className="w-full h-32 object-cover rounded-xl border mt-1" /></div></div>
+                <div className="mt-3 flex gap-2"><button onClick={()=>approveAd(ad)} className="flex-1 bg-black text-white py-2.5 rounded-xl text-sm font-bold">Approve Ad</button></div>
+              </div>
+            ))}
+            {pendingAds.length===0 && <div className="col-span-2 bg-white border rounded-2xl p-12 text-center text-gray-500">No pending ads. Ads pricing: ₦500/day, ₦3,325/week, ₦13,500/month + media + receipt to Palmpay {ownerSettings.account_number}</div>}
+          </div>
+        )}
+
+        {tab==='receipts' && (
+          <div className="bg-white rounded-2xl border p-6">
+            <h3 className="font-bold mb-4">All Member Receipts - Owner Access (Normally hidden, but you have access for disputes)</h3>
+            <p className="text-xs text-gray-500 mb-4">Member receipts are normally approved by Group Admin only, not Owner. But Owner has access here for disputes.</p>
+            <div className="space-y-2">
+              {receipts.map(r=>(
+                <div key={r.id} className="border rounded-xl p-3 flex justify-between text-sm"><div><span className="font-bold">{r.member_name}</span> • ₦{r.amount} • {r.member_email} • Group {r.group_id} • Status {r.status}</div><img src={r.receipt_url} className="w-12 h-12 object-cover rounded" /></div>
+              ))}
+              {receipts.length===0 && <div className="text-center text-gray-500 py-8">No member receipts yet.</div>}
+            </div>
+          </div>
+        )}
+
+        {tab==='settings' && (
+          <div className="max-w-2xl bg-white rounded-2xl border p-8">
+            <h3 className="text-xl font-bold">Owner Settings - Change Bank Details Anytime</h3>
+            <div className="mt-6 grid md:grid-cols-2 gap-4">
+              <div><label className="text-xs font-bold">Bank Name</label><input value={ownerSettings.bank_name} onChange={e=>setOwnerSettings({...ownerSettings, bank_name:e.target.value})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+              <div><label className="text-xs font-bold">Account Number</label><input value={ownerSettings.account_number} onChange={e=>setOwnerSettings({...ownerSettings, account_number:e.target.value})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+              <div><label className="text-xs font-bold">Account Name</label><input value={ownerSettings.account_name} onChange={e=>setOwnerSettings({...ownerSettings, account_name:e.target.value})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+              <div><label className="text-xs font-bold">WhatsApp</label><input value={ownerSettings.whatsapp} onChange={e=>setOwnerSettings({...ownerSettings, whatsapp:e.target.value})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+              <div><label className="text-xs font-bold">Group Fee</label><input type="number" value={ownerSettings.group_fee} onChange={e=>setOwnerSettings({...ownerSettings, group_fee:Number(e.target.value)})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+              <div><label className="text-xs font-bold">Renewal Fee</label><input type="number" value={ownerSettings.renewal_fee} onChange={e=>setOwnerSettings({...ownerSettings, renewal_fee:Number(e.target.value)})} className="w-full border rounded-xl px-4 py-3 text-sm mt-1" /></div>
+            </div>
+            <button onClick={saveSettings} className="mt-6 bg-black text-white px-8 py-3 rounded-xl font-bold">Save Settings - Reflects on User Site Instantly</button>
+            <div className="mt-6 bg-gray-50 rounded-xl p-4 text-xs">
+              <div className="font-bold">Free Storage: Cloudinary 25GB + Telegram unlimited backup</div>
+              <div className="mt-1">User site uploads compressed to 150KB WebP, stored in Cloudinary + backed up to Telegram private channel. Shared DB Supabase: biqutnjvhkvldrihywdb.supabase.co</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
