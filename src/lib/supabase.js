@@ -12,20 +12,12 @@ const supabaseAnonKey = getEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'eyJhbGciOiJIUzI
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export const OWNER_EMAILS = ['vipadarapper@gmail.com', 'payroundsupport@gmail.com'];
-// Owner password - B@$ik0r0 - hashed check in production, plain for demo but stored in env in real
-export const OWNER_PASSWORD = getEnv('OWNER_PASSWORD', 'B@$ik0r0');
-export const OWNER_PASSWORD_HASH = 'B@$ik0r0'; // In production, hash this
-
+// Password is NOT stored here anymore - verified via Supabase Auth securely server-side
 export const GROUP_COLORS = ['#0A7E3C','#2563EB','#DC2626','#7C3AED','#EA580C','#0891B2','#BE185D','#4338CA','#15803D','#B45309','#0E7490','#1F2937'];
 
 export function isOwnerEmail(email) {
   if (!email) return false;
   return OWNER_EMAILS.includes(email.toLowerCase().trim());
-}
-
-export function verifyOwnerPassword(email, password) {
-  if (!isOwnerEmail(email)) return false;
-  return password === OWNER_PASSWORD;
 }
 
 export const DEFAULT_OWNER_SETTINGS = {

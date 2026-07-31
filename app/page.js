@@ -33,15 +33,21 @@ export default function OwnerDashboard() {
     if (s) setOwnerSettings(s);
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     const email = emailInput.trim().toLowerCase();
     const pass = passwordInput;
     if (!isOwnerEmail(email)) { setMsg('Access Denied - Only Vipadarapper@gmail.com and Payroundsupport@gmail.com'); return; }
-    if (pass !== 'B@$ik0r0') { setMsg('Incorrect owner password. Password is B@$ik0r0'); return; }
-    const u = { email, name: email.split('@')[0] };
-    localStorage.setItem('payround_owner_user', JSON.stringify(u));
-    setUser(u); setIsOwner(true); setMsg('Owner logged in - Password verified'); loadAll();
+    setMsg('Verifying securely via Supabase Auth...');
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
+      if (error) throw error;
+      const u = { email, name: email.split('@')[0] };
+      localStorage.setItem('payround_owner_user', JSON.stringify(u));
+      setUser(u); setIsOwner(true); setMsg('Owner logged in - Secure auth verified'); loadAll();
+    } catch (err) {
+      setMsg('Incorrect password or not registered in Supabase Auth. Please ensure owner accounts exist in Supabase Auth with password B@$ik0r0. Error: ' + err.message);
+    }
   };
 
   const handleLogout = () => { localStorage.removeItem('payround_owner_user'); setUser(null); setIsOwner(false); };
