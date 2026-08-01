@@ -167,6 +167,85 @@ alter table owner_settings add column if not exists announcement_updated_at time
 -- Managed from the owner panel -> Settings tab.
 alter table owner_settings add column if not exists owner_password_hash text;
 
+-- ============================================================
+-- MIGRATION v1.2 (Aug 2026) - Safe to re-run.
+-- ============================================================
+
+-- Referral system: who referred this user + their earnings
+alter table users add column if not exists referred_by text;
+alter table users add column if not exists referral_earnings integer default 0;
+
+-- GROUP MEMBERS - join requests approved by group admin before becoming member
+create table if not exists members (
+  id text primary key,
+  group_id text not null references groups(id) on delete cascade,
+  member_email text not null,
+  member_name text,
+  status text not null default 'pending', -- pending, approved, declined
+  requested_at timestamp with time zone default now(),
+  approved_at timestamp with time zone,
+  unique (group_id, member_email)
+);
+alter table members enable row level security;
+create policy "Public read members" on members for select using (true);
+create policy "Public insert members" on members for insert with check (true);
+create policy "Public update members" on members for update using (true);
+
+-- GROUP REVIEWS - users rate groups 1-5 stars with review text
+create table if not exists group_reviews (
+  id text primary key,
+  group_id text not null references groups(id) on delete cascade,
+  reviewer_email text not null,
+  reviewer_name text,
+  rating integer not null check (rating between 1 and 5),
+  review text,
+  created_at timestamp with time zone default now()
+);
+alter table group_reviews enable row level security;
+create policy "Public read group_reviews" on group_reviews for select using (true);
+create policy "Public insert group_reviews" on group_reviews for insert with check (true);
+
+-- MEMBER REVIEWS - group admins review members; visible to other admins at join approval
+create table if not exists member_reviews (
+  id text primary key,
+  member_email text not null,
+  group_id text references groups(id) on delete set null,
+  admin_email text not null,
+  rating integer check (rating between 1 and 5),
+  review text,
+  created_at timestamp with time zone default now()
+);
+alter table member_reviews enable row level security;
+create policy "Public read member_reviews" on member_reviews for select using (true);
+create policy "Public insert member_reviews" on member_reviews for insert with check (true);
+
+-- VERIFICATION REQUESTS - groups submit images why they should be verified
+create table if not exists verification_requests (
+  id text primary key,
+  group_id text references groups(id) on delete cascade,
+  group_name text,
+  admin_email text,
+  reason text,
+  images text, -- comma-separated image urls
+  status text not null default 'pending', -- pending, approved, declined
+  decline_reason text,
+  created_at timestamp with time zone default now(),
+  reviewed_at timestamp with time zone
+);
+alter table verification_requests enable row level security;
+create policy "Public read verification_requests" on verification_requests for select using (true);
+create policy "Public insert verification_requests" on verification_requests for insert with check (true);
+create policy "Public update verification_requests" on verification_requests for update using (true);
+
+-- Subscription cycle changed from 6 months to 4 months
+alter table owner_settings add column if not exists subscription_months integer not null default 4;
+
+-- Homepage stats overrides (NULL = show real number). Managed from owner Settings.
+alter table owner_settings add column if not exists stats_users_override integer;
+alter table owner_settings add column if not exists stats_groups_override integer;
+alter table owner_settings add column if not exists stats_saved_override integer;
+alter table owner_settings add column if not exists stats_satisfaction_override integer;
+
 -- Optional: public storage bucket for announcement media
 -- (Create in Dashboard -> Storage -> New bucket -> name: announcements, public: on)
 
