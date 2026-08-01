@@ -135,10 +135,10 @@ export default function OwnerProPurple() {
       </div>
 
       {/* Main content 70% */}
-      <div className="flex-1 md:ml-[30%] min-w-0 bg-gray-50 min-h-screen">
+      <div className="flex-1 min-w-0 bg-gray-50 min-h-screen">
         <div className="bg-white border-b px-4 md:px-6 h-16 flex items-center justify-between sticky top-0 z-10">
           <div className="flex items-center gap-3">
-            <button onClick={()=>setIsMobileMenuOpen(true)} className="md:hidden w-10 h-10 bg-[#1a1b3a] text-white rounded-xl flex items-center justify-center">☰</button>
+            <button onClick={()=>setIsMobileMenuOpen(true)} className="w-10 h-10 bg-[#1a1b3a] text-white rounded-xl flex items-center justify-center">☰</button>
             <div><h1 className="font-bold text-base md:text-lg">{activeMenu === 'dashboard' ? 'Dashboard Overview' : activeMenu.charAt(0).toUpperCase() + activeMenu.slice(1)}</h1><p className="text-[10px] md:text-xs text-gray-500 hidden md:block">Welcome back! Here&apos;s what&apos;s happening on PayRound. Real data only, no demo, functional and reflects on user site.</p></div>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
