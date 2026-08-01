@@ -32,6 +32,11 @@ export default function OwnerProPurple() {
   const [announcement, setAnnouncement] = useState({ text: '', media: null });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  const handleMenuClick = (menu) => {
+    setActiveMenu(menu);
+    setIsMobileMenuOpen(false); // Close purple panel after choosing option, till hamburger clicked again
+  };
+
   useEffect(() => {
     const stored = localStorage.getItem('payround_owner_user');
     if (stored) { try { const u = JSON.parse(stored); if (OWNER_EMAILS.includes(u.email?.toLowerCase())) { setUser(u); setIsOwner(true); loadData(); } } catch {} }
