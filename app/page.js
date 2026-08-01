@@ -65,6 +65,7 @@ export default function OwnerPanel() {
   const [profileView, setProfileView] = useState(null); // { type:'user'|'group', data:{...}, request? }
   const [photoPendingUsers, setPhotoPendingUsers] = useState([]); // full rows of users awaiting photo approval
   const [zoomImg, setZoomImg] = useState(null); // click-to-expand profile photo lightbox
+  const [loadIssue, setLoadIssue] = useState(''); // visible if a data load ever fails (never silent)
   const [receiptView, setReceiptView] = useState(null);
 
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
@@ -112,9 +113,14 @@ export default function OwnerPanel() {
   const loadData = async () => {
     const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
     setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
-    // Users list is loaded WITHOUT the big photo columns (profile_pic / pending_profile_pic)
-    // so the panel stays fast — the full row (with photos) is fetched when you open a profile.
-        setUsersList(await safe(supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false })));
+    // Users list — compact select for speed, with a SAFE FALLBACK to select('*')
+    // so the list can NEVER silently go empty (e.g. right after a new column is added).
+    {
+      let rq = await supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false });
+      if (rq.error) rq = await supabase.from('users').select('*').order('created_at', { ascending: false });
+      if (rq.error) setLoadIssue(`Users failed to load: ${rq.error.message}`);
+      else { setLoadIssue(''); setUsersList(rq.data || []); }
+    }
     // Full rows (with current photo) for users who have a pending photo change — for the Photo Requests tab
     {
       const pend = await safe(supabase.from('users').select('*').not('pending_profile_pic', 'is', null).order('created_at', { ascending: false }));
@@ -529,6 +535,12 @@ export default function OwnerPanel() {
         <div className="p-4 md:p-6 space-y-6">
           {msg && <div className="bg-green-50 border border-green-200 text-green-800 rounded-xl p-3 text-sm">{msg}</div>}
           {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">{err}</div>}
+          {loadIssue && (
+            <div className="bg-red-50 border border-red-300 text-red-700 rounded-xl p-3 text-sm flex items-center justify-between gap-3">
+              <span>⚠️ {loadIssue} — data may be incomplete.</span>
+              <button onClick={loadData} className="shrink-0 bg-red-600 text-white text-xs font-bold px-3 py-1.5 rounded-full">🔁 Retry</button>
+            </div>
+          )}
 
           {/* 1. DASHBOARD */}
           {activeMenu === 'dashboard' && (
@@ -632,9 +644,12 @@ export default function OwnerPanel() {
           {/* 3. USERS */}
           {activeMenu === 'users' && (
             <div className="bg-white rounded-xl border p-6 space-y-4">
-              <div>
-                <h3 className="font-bold mb-1">Users</h3>
-                <p className="text-xs text-gray-500">View a user's full profile before approving. Approving activates their account — the 🔵 blue verification badge is granted only from the Verification tab.</p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold mb-1">Users <span className="text-xs font-normal text-gray-400">({usersList.length} registered)</span></h3>
+                  <p className="text-xs text-gray-500">View a user's full profile before approving. Approving activates their account — the 🔵 blue verification badge is granted only from the Verification tab.</p>
+                </div>
+                <button onClick={loadData} className="shrink-0 text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">🔁 Refresh</button>
               </div>
 
               {/* Profile photo change requests banner */}
