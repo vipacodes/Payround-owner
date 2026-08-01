@@ -30,6 +30,7 @@ export default function OwnerProPurple() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [bankDetails, setBankDetails] = useState({ bankName: 'Palmpay', accountNumber: '9151723199', accountName: 'Basikoro James Okeroghene' });
   const [announcement, setAnnouncement] = useState({ text: '', media: null });
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('payround_owner_user');
@@ -53,7 +54,7 @@ export default function OwnerProPurple() {
     e.preventDefault();
     const em = email.trim().toLowerCase();
     if (!OWNER_EMAILS.includes(em)) { setMsg('Access Denied - Owner only'); return; }
-    if (password !== OWNER_PASSWORD) { setMsg('Invalid password - B@$ik0r0'); return; }
+    if (password !== OWNER_PASSWORD) { setMsg('Invalid password'); return; }
     const u = { email: em, name: 'PayRound Owner' };
     localStorage.setItem('payround_owner_user', JSON.stringify(u));
     setUser(u); setIsOwner(true); setMsg('Welcome Owner - Purple tab 30% width, functional');
@@ -73,7 +74,7 @@ export default function OwnerProPurple() {
           <div className="text-center mb-6"><div className="w-14 h-14 bg-purple-700 rounded-xl flex items-center justify-center mx-auto mb-3 text-white font-bold text-xl">P</div><h1 className="text-xl font-bold">PayRound Owner</h1><p className="text-xs text-gray-500 mt-1">Purple tab 30% width • Professional • Functional • No demo</p></div>
           <form onSubmit={handleLogin} className="space-y-3">
             <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Owner Email" type="email" className="w-full border rounded-xl px-4 py-3 text-sm" />
-            <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password B@$ik0r0" type="password" className="w-full border rounded-xl px-4 py-3 text-sm" />
+            <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" type="password" className="w-full border rounded-xl px-4 py-3 text-sm" />
             <button className="w-full bg-purple-700 text-white py-3 rounded-xl font-semibold">Login as Owner</button>
           </form>
           {msg && <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-xs">{msg}</div>}
@@ -101,17 +102,17 @@ export default function OwnerProPurple() {
 
         <div className="flex-1 p-3 space-y-4 text-sm overflow-y-auto">
           <div><div className="text-[10px] text-white/40 px-3 mb-2 tracking-widest">OVERVIEW</div>
-            <button onClick={()=>setActiveMenu('dashboard')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='dashboard'?'bg-purple-600 text-white':'text-white/70 hover:bg-white/10'}`}><span className="flex items-center gap-3">🏠 Dashboard</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('dashboard'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='dashboard'?'bg-purple-600 text-white':'text-white/70 hover:bg-white/10'}`}><span className="flex items-center gap-3">🏠 Dashboard</span><span>›</span></button>
           </div>
           <div className="space-y-1">
-            <button onClick={()=>setActiveMenu('groups')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='groups'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">👥 Groups</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('users')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='users'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">👤 Users</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('verification')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='verification'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">✅ Verification</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('transactions')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='transactions'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">💳 Transactions</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('bank')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='bank'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">🏦 Bank Details</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('referral')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='referral'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">🎁 Referral Bonus</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('settings')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='settings'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">⚙️ Settings</span><span>›</span></button>
-            <button onClick={()=>setActiveMenu('announcements')} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='announcements'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">📢 General Announcements</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('groups'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='groups'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">👥 Groups</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('users'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='users'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">👤 Users</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('verification'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='verification'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">✅ Verification</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('transactions'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='transactions'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">💳 Transactions</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('bank'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='bank'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">🏦 Bank Details</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('referral'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='referral'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">🎁 Referral Bonus</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('settings'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='settings'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">⚙️ Settings</span><span>›</span></button>
+            <button onClick={()=>{setActiveMenu('announcements'); setIsMobileMenuOpen(false);}} className={`w-full flex items-center justify-between px-3 py-3 rounded-xl ${activeMenu==='announcements'?'bg-purple-600 text-white':'text-white/60 hover:bg-white/5'}`}><span className="flex items-center gap-3">📢 General Announcements</span><span>›</span></button>
           </div>
 
           <div className="pt-4 border-t border-white/10">
@@ -129,10 +130,17 @@ export default function OwnerProPurple() {
       </div>
 
       {/* Main content 70% */}
-      <div className="flex-1 ml-[30%] min-w-0 bg-gray-50 min-h-screen">
-        <div className="bg-white border-b px-6 h-16 flex items-center justify-between sticky top-0 z-10">
-          <div><h1 className="font-bold text-lg">{activeMenu === 'dashboard' ? 'Dashboard Overview' : activeMenu.charAt(0).toUpperCase() + activeMenu.slice(1)}</h1><p className="text-xs text-gray-500">Welcome back! Here&apos;s what&apos;s happening on PayRound. Real data only, no demo, functional and reflects on user site.</p></div>
-          <div className="flex items-center gap-3"><span className="text-xs border rounded-lg px-3 py-1">May 25, 2025 - May 31, 2025</span><span className="text-xs bg-green-50 text-green-700 px-3 py-1 rounded-full">Real: {usersList.length} users, {groups.length} groups • {user.email}</span></div>
+      <div className="flex-1 md:ml-[30%] min-w-0 bg-gray-50 min-h-screen">
+        <div className="bg-white border-b px-4 md:px-6 h-16 flex items-center justify-between sticky top-0 z-10">
+          <div className="flex items-center gap-3">
+            <button onClick={()=>setIsMobileMenuOpen(true)} className="md:hidden w-10 h-10 bg-[#1a1b3a] text-white rounded-xl flex items-center justify-center">☰</button>
+            <div><h1 className="font-bold text-base md:text-lg">{activeMenu === 'dashboard' ? 'Dashboard Overview' : activeMenu.charAt(0).toUpperCase() + activeMenu.slice(1)}</h1><p className="text-[10px] md:text-xs text-gray-500 hidden md:block">Welcome back! Here&apos;s what&apos;s happening on PayRound. Real data only, no demo, functional and reflects on user site.</p></div>
+          </div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <span className="hidden md:block text-xs border rounded-lg px-3 py-1">May 25-31, 2025</span>
+            <span className="text-[10px] md:text-xs bg-green-50 text-green-700 border px-2 md:px-3 py-1 rounded-full truncate max-w-[120px] md:max-w-none">{usersList.length} users • {user.email.split('@')[0]}</span>
+            <button onClick={()=>setIsMobileMenuOpen(true)} className="md:hidden w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">☰</button>
+          </div>
         </div>
 
         <div className="p-6 space-y-6">
@@ -186,7 +194,7 @@ export default function OwnerProPurple() {
           {activeMenu==='groups' && (
             <div className="space-y-4">
               <div className="flex gap-2 bg-white p-2 rounded-full border w-fit">
-                <button onClick={()=>setActiveMenu('dashboard')} className="px-4 py-2 rounded-full text-xs bg-gray-100">← Back to Dashboard</button>
+                <button onClick={()=>{setActiveMenu('dashboard'); setIsMobileMenuOpen(false);}} className="px-4 py-2 rounded-full text-xs bg-gray-100">← Back to Dashboard</button>
                 <span className="px-4 py-2 text-xs font-bold">Groups - 2 sub buttons: Active Groups and Pending Groups</span>
               </div>
               <div className="grid md:grid-cols-2 gap-4">
@@ -277,7 +285,7 @@ export default function OwnerProPurple() {
             <div className="bg-white rounded-xl border p-6 max-w-md">
               <h3 className="font-bold mb-4">Settings - Change Password</h3>
               <div className="space-y-3">
-                <input placeholder="Current Password B@$ik0r0" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
+                <input placeholder="Current Password" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
                 <input placeholder="New Password" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
                 <input placeholder="Confirm New Password" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
                 <button className="w-full bg-black text-white py-2 rounded-xl text-sm font-bold">Change Password</button>
