@@ -150,6 +150,26 @@ values
   ('CF90123', 'Church Family Fund', 'Church members supporting each other through monthly contributions.', 10000, 'Monthly', 25, '#DC2626', 'john@example.com', 'Pastor John Adebayo', 'active', true, 78)
 on conflict (id) do nothing;
 
+-- ============================================================
+-- MIGRATION v1.1 (Aug 2026) - Run this section once if your
+-- database was created before this version. Safe to re-run.
+-- ============================================================
+
+-- Blue verification badge on users (owner grants in owner panel)
+alter table users add column if not exists is_verified boolean default false;
+
+-- Owner announcements shown at top of the user site
+alter table owner_settings add column if not exists announcement_text text;
+alter table owner_settings add column if not exists announcement_media_url text;
+alter table owner_settings add column if not exists announcement_updated_at timestamp with time zone;
+
+-- Owner password stored as SHA-256 hash only (never plain text).
+-- Managed from the owner panel -> Settings tab.
+alter table owner_settings add column if not exists owner_password_hash text;
+
+-- Optional: public storage bucket for announcement media
+-- (Create in Dashboard -> Storage -> New bucket -> name: announcements, public: on)
+
 -- SEED ADS
 insert into ads (id, business_name, description, phone, website, media_url, duration_days, price, payment_receipt_url, status, submitter_email, expires_at)
 values
