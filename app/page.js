@@ -144,7 +144,6 @@ export default function OwnerProPurple() {
           <div className="flex items-center gap-2 md:gap-3">
             <span className="hidden md:block text-xs border rounded-lg px-3 py-1">May 25-31, 2025</span>
             <span className="text-[10px] md:text-xs bg-green-50 text-green-700 border px-2 md:px-3 py-1 rounded-full truncate max-w-[120px] md:max-w-none">{usersList.length} users • {user.email.split('@')[0]}</span>
-            <button onClick={()=>setIsMobileMenuOpen(true)} className="md:hidden w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">☰</button>
           </div>
         </div>
 
