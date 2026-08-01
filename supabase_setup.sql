@@ -306,3 +306,13 @@ on conflict (id) do nothing;
 -- (user uploads -> saved here; owner approves -> moved to profile_pic)
 -- ============================================================
 alter table users add column if not exists pending_profile_pic text;
+
+-- ============================================================
+-- v1.7 MIGRATION — DELETE policies for auto-purge & account deletion
+-- (notifications older than 60 days are auto-deleted by the apps;
+--  users' membership rows are removed when they delete their account)
+-- ============================================================
+drop policy if exists "Public delete notifications" on notifications;
+create policy "Public delete notifications" on notifications for delete using (true);
+drop policy if exists "Public delete members" on members;
+create policy "Public delete members" on members for delete using (true);
