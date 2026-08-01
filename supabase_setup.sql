@@ -277,6 +277,20 @@ alter table notifications add column if not exists user_email text;
 drop policy if exists "Public delete users" on users;
 create policy "Public delete users" on users for delete using (true);
 
+-- ============================================================
+-- MIGRATION v1.5 (Aug 2026) - Group subscription plans. Safe to re-run.
+-- Old: ₦5,000 / 4 months. New: creator picks a plan at creation.
+-- ============================================================
+
+-- Plans chosen per group
+alter table groups add column if not exists plan_months integer;
+alter table groups add column if not exists plan_price integer;
+
+-- Plan prices (owner-editable from owner panel -> Settings)
+alter table owner_settings add column if not exists plan_1m integer not null default 1500;
+alter table owner_settings add column if not exists plan_6m integer not null default 8000;
+alter table owner_settings add column if not exists plan_12m integer not null default 15000;
+
 -- Optional: public storage bucket for announcement media
 -- (Create in Dashboard -> Storage -> New bucket -> name: announcements, public: on)
 

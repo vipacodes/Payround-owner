@@ -70,7 +70,7 @@ export default function OwnerPanel() {
   const [announcementFile, setAnnouncementFile] = useState(null);
   const [pwHash, setPwHash] = useState(OWNER_PASSWORD_HASH_FALLBACK);
   const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
-  const [siteControls, setSiteControls] = useState({ subscriptionMonths: 4, statsUsers: '', statsGroups: '', statsSaved: '', statsSatisfaction: '' });
+  const [siteControls, setSiteControls] = useState({ plan1m: DEFAULT_OWNER_SETTINGS.plan_1m, plan6m: DEFAULT_OWNER_SETTINGS.plan_6m, plan12m: DEFAULT_OWNER_SETTINGS.plan_12m, statsUsers: '', statsGroups: '', statsSaved: '', statsSatisfaction: '' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const handleMenuClick = (menu) => {
@@ -91,7 +91,9 @@ export default function OwnerPanel() {
           if (s.announcement_text) setAnnouncementText(s.announcement_text);
           if (s.announcement_media_url) setAnnouncementMedia(s.announcement_media_url);
           setSiteControls({
-            subscriptionMonths: s.subscription_months ?? 4,
+            plan1m: s.plan_1m ?? DEFAULT_OWNER_SETTINGS.plan_1m,
+            plan6m: s.plan_6m ?? DEFAULT_OWNER_SETTINGS.plan_6m,
+            plan12m: s.plan_12m ?? DEFAULT_OWNER_SETTINGS.plan_12m,
             statsUsers: s.stats_users_override ?? '',
             statsGroups: s.stats_groups_override ?? '',
             statsSaved: s.stats_saved_override ?? '',
@@ -256,7 +258,9 @@ export default function OwnerPanel() {
     const num = (v) => (v === '' || v === null ? null : Number(v));
     try {
       const { error } = await supabase.from('owner_settings').update({
-        subscription_months: Number(siteControls.subscriptionMonths) || 4,
+        plan_1m: Number(siteControls.plan1m) || DEFAULT_OWNER_SETTINGS.plan_1m,
+        plan_6m: Number(siteControls.plan6m) || DEFAULT_OWNER_SETTINGS.plan_6m,
+        plan_12m: Number(siteControls.plan12m) || DEFAULT_OWNER_SETTINGS.plan_12m,
         stats_users_override: num(siteControls.statsUsers), stats_groups_override: num(siteControls.statsGroups),
         stats_saved_override: num(siteControls.statsSaved), stats_satisfaction_override: num(siteControls.statsSatisfaction),
         updated_at: new Date().toISOString(),
@@ -363,8 +367,8 @@ export default function OwnerPanel() {
   const userMemberGroups = (u) => members.filter(m => m.member_email === u.email && m.status === 'approved');
   const userReviews = (u) => memberReviews.filter(r => r.member_email === u.email);
   const transactions = [
-    ...groups.filter(g => g.creation_receipt_url).map(g => ({ id: `c-${g.id}`, type: 'Group creation fee', from: g.admin_email, name: g.name, amount: 5000, date: g.first_payment_at || g.created_at, receipt: g.creation_receipt_url })),
-    ...groups.filter(g => g.renewal_receipt_url).map(g => ({ id: `r-${g.id}`, type: 'Group renewal', from: g.admin_email, name: g.name, amount: 5000, date: g.expiry_at || g.created_at, receipt: g.renewal_receipt_url })),
+    ...groups.filter(g => g.creation_receipt_url).map(g => ({ id: `c-${g.id}`, type: `Creation fee (${g.plan_months || '?'}mo plan)`, from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.first_payment_at || g.created_at, receipt: g.creation_receipt_url })),
+    ...groups.filter(g => g.renewal_receipt_url).map(g => ({ id: `r-${g.id}`, type: 'Group renewal', from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.expiry_at || g.created_at, receipt: g.renewal_receipt_url })),
     ...ads.map(a => ({ id: `a-${a.id}`, type: 'Ad placement', from: a.submitter_email, name: a.business_name, amount: a.price, date: a.submitted_at, receipt: a.payment_receipt_url })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
@@ -558,6 +562,8 @@ export default function OwnerPanel() {
                     <div key={g.id} className="border rounded-xl p-3 mb-3">
                       <div className="font-medium text-sm">{g.name} <span className="text-xs text-gray-500">• {g.admin_email}</span></div>
                       <div className="text-xs text-gray-500 mt-1">₦{Number(g.amount).toLocaleString()} {g.frequency} • {g.max_members} members • Color: <span className="inline-block w-3 h-3 rounded-full align-middle" style={{ background: g.color }} /></div>
+                      {g.plan_months && <div className="text-[11px] mt-1 font-medium text-purple-700">Plan: {g.plan_months} month{g.plan_months > 1 ? 's' : ''} — receipt should be ₦{Number(g.plan_price || 0).toLocaleString()}</div>}
+                      {!g.plan_months && <div className="text-[11px] mt-1 text-gray-400">Plan: legacy — check receipt amount</div>}
                       <div className="flex flex-wrap gap-2 mt-3">
                         <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
                         <button disabled={busy} onClick={() => approveGroup(g)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve → Go Live</button>
@@ -786,9 +792,13 @@ export default function OwnerPanel() {
                 <p className="text-xs text-gray-500 mb-4">These values drive the user site. Leave a stat empty to show the real number.</p>
                 <div className="space-y-3 text-sm">
                   <div>
-                    <label className="text-xs font-bold">Subscription length (months) — ₦5,000 per cycle</label>
-                    <input type="number" min="1" value={siteControls.subscriptionMonths} onChange={e => setSiteControls({ ...siteControls, subscriptionMonths: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" />
-                    <p className="text-[10px] text-gray-400 mt-1">Now {siteControls.subscriptionMonths} months — was 6, changed to 4 per your instruction.</p>
+                    <label className="text-xs font-bold">Group subscription plans (₦) — what creators pay</label>
+                    <div className="grid grid-cols-3 gap-2 mt-1">
+                      <div><label className="text-[10px] text-gray-500">1 Month</label><input type="number" min="0" value={siteControls.plan1m} onChange={e => setSiteControls({ ...siteControls, plan1m: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                      <div><label className="text-[10px] text-gray-500">6 Months</label><input type="number" min="0" value={siteControls.plan6m} onChange={e => setSiteControls({ ...siteControls, plan6m: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                      <div><label className="text-[10px] text-gray-500">12 Months</label><input type="number" min="0" value={siteControls.plan12m} onChange={e => setSiteControls({ ...siteControls, plan12m: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1">Creators pick a plan at group creation and upload the matching receipt. Currently ₦{Number(siteControls.plan1m).toLocaleString()} / ₦{Number(siteControls.plan6m).toLocaleString()} / ₦{Number(siteControls.plan12m).toLocaleString()}.</p>
                   </div>
                   <div className="border-t pt-3 text-xs font-bold text-gray-500">Homepage stats override (empty = real numbers)</div>
                   <div className="grid grid-cols-2 gap-3">
@@ -889,6 +899,8 @@ export default function OwnerPanel() {
           <div>
             <div className="text-xs font-bold text-gray-500 mb-1">GROUP DETAILS</div>
             {infoRow('Amount', `₦${Number(g.amount).toLocaleString()} ${g.frequency || ''}`)}
+            {g.plan_months ? infoRow('Plan', `${g.plan_months} month${g.plan_months > 1 ? 's' : ''} — ₦${Number(g.plan_price || 0).toLocaleString()}`) : null}
+            {g.expiry_at ? infoRow('Plan expires', new Date(g.expiry_at).toLocaleDateString()) : null}
             {infoRow('Max members', g.max_members)}
             {infoRow('Members (approved)', gMembers.length)}
             {infoRow('Color', <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block border" style={{ background: g.color }} /> {g.color}</span>)}
