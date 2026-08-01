@@ -316,3 +316,9 @@ drop policy if exists "Public delete notifications" on notifications;
 create policy "Public delete notifications" on notifications for delete using (true);
 drop policy if exists "Public delete members" on members;
 create policy "Public delete members" on members for delete using (true);
+
+-- ============================================================
+-- v1.8 MIGRATION — group badge tiers + member phone on join requests
+-- ============================================================
+alter table groups add column if not exists badge_tier text;
+alter table members add column if not exists member_phone text;
