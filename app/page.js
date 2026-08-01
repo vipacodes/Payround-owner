@@ -109,7 +109,9 @@ export default function OwnerPanel() {
   const loadData = async () => {
     const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
     setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
-    setUsersList(await safe(supabase.from('users').select('*').order('created_at', { ascending: false })));
+    // Users list is loaded WITHOUT the big photo columns (profile_pic / pending_profile_pic)
+    // so the panel stays fast — the full row (with photos) is fetched when you open a profile.
+    setUsersList(await safe(supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false })));
     setMembers(await safe(supabase.from('members').select('*')));
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
     setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
@@ -119,6 +121,42 @@ export default function OwnerPanel() {
 
   const notify = async (type, groupId, message, userEmail) => {
     try { await supabase.from('notifications').insert({ id: `${type}-${Date.now()}`, type, group_id: groupId || null, message, user_email: userEmail || null }); } catch {}
+  };
+
+  /* ---------- USER PROFILE OPEN (fetches the full row incl. photos, keeps list fast) ---------- */
+  const openUserProfile = async (u, request) => {
+    if (!u) return;
+    setErr(''); setMsg('');
+    setProfileView({ type: 'user', data: u, request, loadingFull: true });
+    try {
+      const { data } = await supabase.from('users').select('*').eq('id', u.id).single();
+      if (data) setProfileView({ type: 'user', data, request });
+    } catch (e) {
+      setErr(`Could not load full profile: ${e.message}`);
+    }
+  };
+
+  /* ---------- PROFILE PHOTO REVIEW (owner approval required for photo changes) ---------- */
+  const reviewUserPhoto = async (u, approve) => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      if (approve) {
+        const { error } = await supabase.from('users').update({ profile_pic: u.pending_profile_pic, pending_profile_pic: null }).eq('id', u.id);
+        if (error) throw error;
+        await notify('photo_approved', null, '🎉 Your new profile photo has been approved — it is now visible on your profile.', u.email);
+        setMsg(`✔ Photo approved for ${u.name || u.email}.`);
+      } else {
+        const { error } = await supabase.from('users').update({ pending_profile_pic: null }).eq('id', u.id);
+        if (error) throw error;
+        await notify('photo_declined', null, '❌ Your new profile photo was declined. Please upload a clear, appropriate photo of yourself from Settings.', u.email);
+        setMsg(`✖ Photo declined for ${u.name || u.email}.`);
+      }
+      setProfileView(null);
+      await loadData();
+    } catch (e) {
+      setErr(`Photo review failed: ${e.message}`);
+    }
+    setBusy(false);
   };
 
   /* ---------- AUTH (no persistence — password required every visit) ---------- */
@@ -584,27 +622,36 @@ export default function OwnerPanel() {
                 <h3 className="font-bold mb-1">Users</h3>
                 <p className="text-xs text-gray-500">View a user's full profile before approving. Approving activates their account — the 🔵 blue verification badge is granted only from the Verification tab.</p>
               </div>
+
+              {/* Profile photo change requests banner */}
+              {usersList.filter(u => u.pending_profile_pic).length > 0 && (
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between gap-3">
+                  <p className="text-xs text-purple-900">📷 <b>{usersList.filter(u => u.pending_profile_pic).length}</b> profile photo change{usersList.filter(u => u.pending_profile_pic).length > 1 ? 's' : ''} awaiting your approval — open the user's profile to review the new photo.</p>
+                  <span className="text-lg shrink-0">👁</span>
+                </div>
+              )}
+
               {subPills([{ id: 'active', label: '✅ Active Users', count: activeUsers.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingUsers.length }], usersSub, setUsersSub)}
 
               <div className="grid md:grid-cols-2 gap-4">
                 {usersSub === 'active' ? (
                   activeUsers.length > 0 ? activeUsers.map(u => (
                     <div key={u.id} className="border rounded-xl p-4">
-                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
-                      <button onClick={() => setProfileView({ type: 'user', data: u })} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                      <button onClick={() => openUserProfile(u)} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
                     </div>
                   )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No approved users yet — approve users from the pending list.</div>
                 ) : (
                   pendingUsers.length > 0 ? pendingUsers.map(u => (
                     <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
-                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email} • Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</div>
                       {u.decline_reason && <div className="text-[11px] text-red-600 mt-1">Reason: {u.decline_reason}</div>}
                       <div className="flex flex-wrap gap-2 mt-2">
-                        <button onClick={() => setProfileView({ type: 'user', data: u })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        <button onClick={() => openUserProfile(u)} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
                         <button disabled={busy} onClick={() => approveUser(u)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve</button>
                         {!isUserDeclined(u) && <button disabled={busy} onClick={() => declineUser(u)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>}
                       </div>
@@ -676,7 +723,7 @@ export default function OwnerPanel() {
                         </div>
                       )}
                       <div className="flex flex-wrap gap-2 mt-3">
-                        {u && <button onClick={() => setProfileView({ type: 'user', data: u, request: r })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile First</button>}
+                        {u && <button onClick={() => openUserProfile(u, r)} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile First</button>}
                         <button disabled={busy} onClick={() => reviewVerification(r, true)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Verify → 🔵 Blue Badge</button>
                         <button disabled={busy} onClick={() => reviewVerification(r, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>
                       </div>
@@ -707,7 +754,7 @@ export default function OwnerPanel() {
                       <div className="text-[11px] text-purple-700 font-mono font-bold">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
                     </div>
-                    <button onClick={() => setProfileView({ type: 'user', data: u })} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">View Profile →</button>
+                    <button onClick={() => openUserProfile(u)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">View Profile →</button>
                   </div>
                 )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No verified users yet — verify from User Requests.</div>
               )}
@@ -757,7 +804,7 @@ export default function OwnerPanel() {
               </div>
               {usersList.filter(u => referredUsers(u).length > 0).length > 0 ? usersList.filter(u => referredUsers(u).length > 0).map(u => (
                 <div key={u.id} className="border rounded-xl p-4 mb-2">
-                  <button onClick={() => setProfileView({ type: 'user', data: u })} className="w-full flex justify-between items-center text-left">
+                  <button onClick={() => openUserProfile(u)} className="w-full flex justify-between items-center text-left">
                     <div>
                       <div className="font-medium text-sm">{u.name || u.email} {u.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">ID: {refId(u)}</span></div>
                       <div className="text-xs text-gray-500">{referredUsers(u).length} referred</div>
@@ -1008,7 +1055,32 @@ export default function OwnerPanel() {
         <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
           <span className={`px-2 py-0.5 rounded-full ${approved ? 'bg-green-100 text-green-700' : declined ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{approved ? 'approved user' : declined ? 'declined' : 'pending approval'}</span>
           {u.is_verified && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">🔵 blue verified</span>}
+          {u.pending_profile_pic && <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">📷 photo change pending</span>}
         </div>
+
+        {/* Profile photo change request — owner approval required */}
+        {u.pending_profile_pic && (
+          <div className="mt-4 border border-purple-300 bg-purple-50/60 rounded-xl p-3">
+            <div className="text-xs font-bold text-purple-800 mb-2">📷 PHOTO CHANGE REQUEST — the user uploaded a new profile photo</div>
+            <div className="flex items-center gap-4">
+              <div className="text-center">
+                {u.profile_pic
+                  ? <img src={u.profile_pic} alt="current" className="w-16 h-16 rounded-full object-cover border shadow-sm" />
+                  : <div className="w-16 h-16 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
+                <div className="text-[10px] text-gray-500 mt-1">Current</div>
+              </div>
+              <div className="text-purple-500 font-bold text-lg">→</div>
+              <div className="text-center">
+                <img src={u.pending_profile_pic} alt="new" className="w-16 h-16 rounded-full object-cover border-2 border-purple-400 shadow-sm" />
+                <div className="text-[10px] text-purple-700 font-bold mt-1">New photo</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button disabled={busy} onClick={() => reviewUserPhoto(u, true)} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve Photo</button>
+              <button disabled={busy} onClick={() => reviewUserPhoto(u, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline Photo</button>
+            </div>
+          </div>
+        )}
 
         <div className="grid md:grid-cols-2 gap-5 mt-4">
           <div>

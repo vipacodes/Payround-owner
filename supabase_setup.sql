@@ -300,3 +300,9 @@ values
   ('ad1', 'BolarTech Solutions', 'Affordable web development and IT services. We build modern websites from ₦150,000.', '08012345678', 'https://bolartech.com', 'https://via.placeholder.com/400x200?text=BolarTech', 30, 13500, 'https://via.placeholder.com/400x200?text=Receipt', 'approved', 'admin@test.com', now() + interval '30 days'),
   ('ad2', 'Deola Fashion House', 'Premium native and contemporary fashion. Custom designs for all occasions.', '08098765432', null, 'https://via.placeholder.com/400x200?text=Deola', 7, 3325, 'https://via.placeholder.com/400x200?text=Receipt', 'approved', 'admin@test.com', now() + interval '7 days')
 on conflict (id) do nothing;
+
+-- ============================================================
+-- v1.6 MIGRATION — Profile photo changes require owner approval
+-- (user uploads -> saved here; owner approves -> moved to profile_pic)
+-- ============================================================
+alter table users add column if not exists pending_profile_pic text;
