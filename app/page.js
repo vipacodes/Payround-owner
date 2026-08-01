@@ -115,8 +115,8 @@ export default function OwnerPanel() {
     setAds(await safe(supabase.from('ads').select('*')));
   };
 
-  const notify = async (type, groupId, message) => {
-    try { await supabase.from('notifications').insert({ id: `${type}-${Date.now()}`, type, group_id: groupId || null, message }); } catch {}
+  const notify = async (type, groupId, message, userEmail) => {
+    try { await supabase.from('notifications').insert({ id: `${type}-${Date.now()}`, type, group_id: groupId || null, message, user_email: userEmail || null }); } catch {}
   };
 
   /* ---------- AUTH (no persistence — password required every visit) ---------- */
@@ -147,7 +147,7 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('groups').update({ status: 'active' }).eq('id', g.id);
       if (error) throw error;
-      await notify('group_approved', g.id, `Group "${g.name}" approved and is now live.`);
+      await notify('group_approved', g.id, `Group "${g.name}" approved and is now live.`, g.admin_email);
       setMsg(`"${g.name}" approved — now live on the user site. (⭐ verification badge is separate — set it in the Verification tab.)`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Approve failed: ${e.message}`); }
@@ -161,7 +161,7 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('groups').update({ status: 'rejected', rejection_reason: reason }).eq('id', g.id);
       if (error) throw error;
-      await notify('group_rejected', g.id, `Group "${g.name}" was declined: ${reason}`);
+      await notify('group_rejected', g.id, `Group "${g.name}" was declined: ${reason}`, g.admin_email);
       setMsg(`"${g.name}" declined.`); setProfileView(null); loadData();
     } catch (e) { setErr(`Decline failed: ${e.message}`); }
     setBusy(false);
@@ -173,7 +173,7 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('users').update({ is_approved: true, approval_status: 'approved' }).eq('id', u.id);
       if (error) throw error;
-      await notify('user_approved', null, `Welcome! Your PayRound account has been approved.`);
+      await notify('user_approved', null, `Welcome! Your PayRound account has been approved.`, u.email);
       setMsg(`${u.name || u.email} approved (active user). 🔵 Blue badge is only granted from the Verification tab.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Approve failed: ${e.message}. If it mentions "is_approved", run the v1.3 migration SQL.`); }
@@ -187,7 +187,7 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('users').update({ is_approved: false, approval_status: 'declined', decline_reason: reason }).eq('id', u.id);
       if (error) throw error;
-      await notify('user_declined', null, `Your account approval was declined: ${reason}. You may contact support.`);
+      await notify('user_declined', null, `Your account approval was declined: ${reason}. You may contact support.`, u.email);
       setMsg(`${u.name || u.email} declined.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Decline failed: ${e.message}. If it mentions "approval_status", run the v1.3 migration SQL.`); }
@@ -214,10 +214,12 @@ export default function OwnerPanel() {
           await supabase.from('groups').update({ is_verified: true }).eq('id', req.group_id);
         }
       }
+      const targetEmail = req.subject_type === 'user' ? req.user_email : (req.admin_email || (groups.find(x => x.id === req.group_id)?.admin_email) || null);
       await notify(verify ? 'verification_approved' : 'verification_declined', req.group_id || null,
         verify
           ? `✅ Verification approved for ${subjectName}.`
-          : `Verification for ${subjectName} was denied${reason ? `: ${reason}` : ' because you are not eligible for verification'}. You can re-apply after 7 days.`);
+          : `Verification for ${subjectName} was denied${reason ? `: ${reason}` : ' because you are not eligible for verification'}. You can re-apply after 7 days.`,
+        targetEmail);
       setMsg(`${subjectName} ${verify ? 'verified 🔵' : 'declined'} — they get a notification on the user site.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Review failed: ${e.message}. If it mentions a column, run the v1.3 migration SQL.`); }
@@ -865,9 +867,14 @@ export default function OwnerPanel() {
     return (
       <div>
         <div className="flex justify-between items-start gap-3">
-          <div>
-            <h3 className="font-bold text-lg">{g.name} {g.is_verified && <BlueBadge />} <span className="text-sm">{badgeEmoji(g.badge_tier)}</span></h3>
-            <div className="text-[11px] text-purple-700 font-mono font-bold">Group ID: {g.id}</div>
+          <div className="flex items-center gap-3">
+            {g.avatar_url
+              ? <img src={g.avatar_url} alt={g.name} className="w-14 h-14 rounded-2xl object-cover border shadow-sm" />
+              : <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-sm" style={{ background: g.color || '#7C3AED' }}>{(g.name || 'G')[0].toUpperCase()}</div>}
+            <div>
+              <h3 className="font-bold text-lg">{g.name} {g.is_verified && <BlueBadge />} <span className="text-sm">{badgeEmoji(g.badge_tier)}</span></h3>
+              <div className="text-[11px] text-purple-700 font-mono font-bold">Group ID: {g.id}</div>
+            </div>
           </div>
           <button onClick={() => setProfileView(null)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button>
         </div>
@@ -974,9 +981,14 @@ export default function OwnerPanel() {
     return (
       <div>
         <div className="flex justify-between items-start gap-3">
-          <div>
-            <h3 className="font-bold text-lg">{u.name || '—'} {u.is_verified && <BlueBadge />}</h3>
-            <div className="text-[11px] text-purple-700 font-mono font-bold">Unique ID: {refId(u)}</div>
+          <div className="flex items-center gap-3">
+            {u.profile_pic
+              ? <img src={u.profile_pic} alt={u.name} className="w-14 h-14 rounded-full object-cover border shadow-sm" />
+              : <div className="w-14 h-14 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
+            <div>
+              <h3 className="font-bold text-lg">{u.name || '—'} {u.is_verified && <BlueBadge />}</h3>
+              <div className="text-[11px] text-purple-700 font-mono font-bold">Unique ID: {refId(u)}</div>
+            </div>
           </div>
           <button onClick={() => setProfileView(null)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button>
         </div>

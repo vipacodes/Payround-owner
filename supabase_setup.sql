@@ -262,6 +262,21 @@ alter table verification_requests add column if not exists subject_type text not
 alter table verification_requests add column if not exists user_email text;
 alter table verification_requests add column if not exists user_name text;
 
+-- ============================================================
+-- MIGRATION v1.4 (Aug 2026) - Safe to re-run.
+-- ============================================================
+
+-- Profile images: user signup photo + optional group picture
+alter table users add column if not exists profile_pic text;
+alter table groups add column if not exists avatar_url text;
+
+-- Targeted notifications (user_email NULL = broadcast to everyone)
+alter table notifications add column if not exists user_email text;
+
+-- Users can delete their own account from the user site Settings tab
+drop policy if exists "Public delete users" on users;
+create policy "Public delete users" on users for delete using (true);
+
 -- Optional: public storage bucket for announcement media
 -- (Create in Dashboard -> Storage -> New bucket -> name: announcements, public: on)
 
