@@ -24,6 +24,7 @@ const MENU = [
   { id: 'groups', icon: '👥', label: 'Groups' },
   { id: 'users', icon: '👤', label: 'Users' },
   { id: 'verification', icon: '✅', label: 'Verification' },
+  { id: 'photo_requests', icon: '📷', label: 'Photo Requests' },
   { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
   { id: 'referral', icon: '🎁', label: 'Referral Bonus' },
@@ -62,6 +63,8 @@ export default function OwnerPanel() {
   const [ads, setAds] = useState([]);
 
   const [profileView, setProfileView] = useState(null); // { type:'user'|'group', data:{...}, request? }
+  const [photoPendingUsers, setPhotoPendingUsers] = useState([]); // full rows of users awaiting photo approval
+  const [zoomImg, setZoomImg] = useState(null); // click-to-expand profile photo lightbox
   const [receiptView, setReceiptView] = useState(null);
 
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
@@ -111,7 +114,17 @@ export default function OwnerPanel() {
     setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
     // Users list is loaded WITHOUT the big photo columns (profile_pic / pending_profile_pic)
     // so the panel stays fast — the full row (with photos) is fetched when you open a profile.
-    setUsersList(await safe(supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false })));
+        setUsersList(await safe(supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false })));
+    // Full rows (with current photo) for users who have a pending photo change — for the Photo Requests tab
+    {
+      const pend = await safe(supabase.from('users').select('*').not('pending_profile_pic', 'is', null).order('created_at', { ascending: false }));
+      setPhotoPendingUsers(pend);
+    }
+    // Auto-cleanup: purge notifications older than 60 days (keeps the database tidy)
+    try {
+      const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+      await supabase.from('notifications').delete().lt('created_at', cutoff);
+    } catch {}
     setMembers(await safe(supabase.from('members').select('*')));
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
     setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
@@ -455,7 +468,8 @@ export default function OwnerPanel() {
         {menuBtn(MENU[1], pendingGroups.length)}
         {menuBtn(MENU[2], pendingUsers.length)}
         {menuBtn(MENU[3], groupRequests.length + userRequests.length)}
-        {MENU.slice(4).map(m => menuBtn(m))}
+        {menuBtn(MENU[4], photoPendingUsers.length)}
+        {MENU.slice(5).map(m => menuBtn(m))}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -761,7 +775,55 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 5. TRANSACTIONS */}
+          {/* 5. PHOTO REQUESTS — approve / decline profile photo changes */}
+          {activeMenu === 'photo_requests' && (
+            <div className="bg-white rounded-xl border p-6 space-y-4">
+              <div>
+                <h3 className="font-bold mb-1">📷 Photo Requests</h3>
+                <p className="text-xs text-gray-500">Users must get your approval before a new profile photo goes live. Compare the current photo with the new one, then Approve or Decline. The user is notified either way. Click any photo to expand it.</p>
+              </div>
+
+              {photoPendingUsers.length > 0 ? photoPendingUsers.map(u => (
+                <div key={u.id} className="border border-purple-200 rounded-xl p-4 bg-purple-50/40">
+                  <div className="flex flex-wrap justify-between items-start gap-3">
+                    <div>
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />}</div>
+                      <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
+                      <div className="text-xs text-gray-500">{u.email}</div>
+                    </div>
+                    <button onClick={() => openUserProfile(u)} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium bg-white">👁 View Full Profile</button>
+                  </div>
+
+                  <div className="flex items-center gap-4 sm:gap-6 mt-4">
+                    <div className="text-center">
+                      {u.profile_pic
+                        ? <img src={u.profile_pic} alt="current" onClick={() => setZoomImg(u.profile_pic)} className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
+                        : <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-2xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
+                      <div className="text-[10px] text-gray-500 mt-1">Current photo</div>
+                    </div>
+                    <div className="text-purple-500 font-bold text-2xl">→</div>
+                    <div className="text-center">
+                      <img src={u.pending_profile_pic} alt="new" onClick={() => setZoomImg(u.pending_profile_pic)} className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover border-2 border-purple-400 shadow-sm cursor-zoom-in hover:opacity-90" />
+                      <div className="text-[10px] text-purple-700 font-bold mt-1">New photo</div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    <button disabled={busy} onClick={() => reviewUserPhoto(u, true)} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve Photo</button>
+                    <button disabled={busy} onClick={() => reviewUserPhoto(u, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline Photo</button>
+                  </div>
+                </div>
+              )) : (
+                <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">
+                  <div className="text-3xl mb-2">📷</div>
+                  No profile photo changes waiting for approval.
+                  <div className="text-[11px] text-gray-400 mt-1">When a user uploads a new profile photo, it appears here for your review first.</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 6. TRANSACTIONS */}
           {activeMenu === 'transactions' && (
             <div className="bg-white rounded-xl border p-6">
               <h3 className="font-bold mb-1">Transactions</h3>
@@ -778,7 +840,7 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 6. BANK DETAILS */}
+          {/* 7. BANK DETAILS */}
           {activeMenu === 'bank' && (
             <div className="bg-white rounded-xl border p-6 max-w-xl">
               <h3 className="font-bold mb-1">Bank Details</h3>
@@ -792,7 +854,7 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 7. REFERRAL BONUS */}
+          {/* 8. REFERRAL BONUS */}
           {activeMenu === 'referral' && (
             <div className="bg-white rounded-xl border p-6">
               <h3 className="font-bold mb-1">Referral Bonus</h3>
@@ -816,7 +878,7 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 8. SETTINGS */}
+          {/* 9. SETTINGS */}
           {activeMenu === 'settings' && (
             <div className="grid md:grid-cols-2 gap-6 items-start">
               <div className="bg-white rounded-xl border p-6">
@@ -860,7 +922,7 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 9. ANNOUNCEMENTS */}
+          {/* 10. ANNOUNCEMENTS */}
           {activeMenu === 'announcements' && (
             <div className="bg-white rounded-xl border p-6 max-w-2xl">
               <h3 className="font-bold mb-1">General Announcements</h3>
@@ -892,6 +954,14 @@ export default function OwnerPanel() {
           <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             {profileView.type === 'group' ? renderGroupProfile(profileView.data, profileView.request) : renderUserProfile(profileView.data, profileView.request)}
           </div>
+        </div>
+      )}
+
+      {/* Photo lightbox — click any profile photo to expand it */}
+      {zoomImg && (
+        <div className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4" onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="expanded" className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain" onClick={e => e.stopPropagation()} />
+          <button onClick={() => setZoomImg(null)} aria-label="Close" className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center">×</button>
         </div>
       )}
 
@@ -1042,7 +1112,7 @@ export default function OwnerPanel() {
         <div className="flex justify-between items-start gap-3">
           <div className="flex items-center gap-3">
             {u.profile_pic
-              ? <img src={u.profile_pic} alt={u.name} className="w-14 h-14 rounded-full object-cover border shadow-sm" />
+              ? <img src={u.profile_pic} alt={u.name} onClick={() => setZoomImg(u.profile_pic)} title="Click to expand" className="w-14 h-14 rounded-full object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
               : <div className="w-14 h-14 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
             <div>
               <h3 className="font-bold text-lg">{u.name || '—'} {u.is_verified && <BlueBadge />}</h3>
@@ -1065,13 +1135,13 @@ export default function OwnerPanel() {
             <div className="flex items-center gap-4">
               <div className="text-center">
                 {u.profile_pic
-                  ? <img src={u.profile_pic} alt="current" className="w-16 h-16 rounded-full object-cover border shadow-sm" />
+                  ? <img src={u.profile_pic} alt="current" onClick={() => setZoomImg(u.profile_pic)} title="Click to expand" className="w-16 h-16 rounded-full object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
                   : <div className="w-16 h-16 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
                 <div className="text-[10px] text-gray-500 mt-1">Current</div>
               </div>
               <div className="text-purple-500 font-bold text-lg">→</div>
               <div className="text-center">
-                <img src={u.pending_profile_pic} alt="new" className="w-16 h-16 rounded-full object-cover border-2 border-purple-400 shadow-sm" />
+                <img src={u.pending_profile_pic} alt="new" onClick={() => setZoomImg(u.pending_profile_pic)} title="Click to expand" className="w-16 h-16 rounded-full object-cover border-2 border-purple-400 shadow-sm cursor-zoom-in hover:opacity-90" />
                 <div className="text-[10px] text-purple-700 font-bold mt-1">New photo</div>
               </div>
             </div>
