@@ -246,6 +246,22 @@ alter table owner_settings add column if not exists stats_groups_override intege
 alter table owner_settings add column if not exists stats_saved_override integer;
 alter table owner_settings add column if not exists stats_satisfaction_override integer;
 
+-- ============================================================
+-- MIGRATION v1.3 (Aug 2026) - Safe to re-run.
+-- ============================================================
+
+-- User APPROVAL is now separate from the blue verification badge:
+-- approving a user activates the account; the blue badge is granted
+-- only from the owner panel -> Verification tab.
+alter table users add column if not exists is_approved boolean default false;
+alter table users add column if not exists approval_status text not null default 'pending'; -- pending, approved, declined
+alter table users add column if not exists decline_reason text;
+
+-- Verification requests can now be for groups OR users
+alter table verification_requests add column if not exists subject_type text not null default 'group'; -- group, user
+alter table verification_requests add column if not exists user_email text;
+alter table verification_requests add column if not exists user_name text;
+
 -- Optional: public storage bucket for announcement media
 -- (Create in Dashboard -> Storage -> New bucket -> name: announcements, public: on)
 

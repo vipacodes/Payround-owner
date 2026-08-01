@@ -12,9 +12,8 @@ function currentWeekRange() {
   const now = new Date();
   const start = new Date(now); start.setDate(now.getDate() - now.getDay());
   const end = new Date(start); end.setDate(start.getDate() + 6);
-  const s = start.toLocaleDateString('en-US', { month: 'short' });
   return start.getMonth() === end.getMonth()
-    ? `${s} ${start.getDate()}–${end.getDate()}, ${end.getFullYear()}`
+    ? `${start.toLocaleDateString('en-US', { month: 'short' })} ${start.getDate()}–${end.getDate()}, ${end.getFullYear()}`
     : `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${end.getFullYear()}`;
 }
 
@@ -35,6 +34,10 @@ const MENU = [
 function Stars({ n }) {
   return <span className="text-yellow-500 tracking-tight">{'★'.repeat(n)}{'☆'.repeat(Math.max(0, 5 - n))}</span>;
 }
+function BlueBadge() {
+  return <span className="inline-block w-4 h-4 bg-blue-500 text-white rounded-full text-[9px] text-center leading-4 align-middle" title="Blue verified">✓</span>;
+}
+const badgeEmoji = (t) => ({ bronze: '🥉', silver: '🥈', gold: '🥇' }[t || 'bronze'] || '🥉');
 
 export default function OwnerPanel() {
   const [email, setEmail] = useState('');
@@ -46,26 +49,21 @@ export default function OwnerPanel() {
   const [busy, setBusy] = useState(false);
   const [activeMenu, setActiveMenu] = useState('dashboard');
 
-  // sub-buttons
   const [groupsSub, setGroupsSub] = useState('active');
   const [usersSub, setUsersSub] = useState('active');
-  const [verifySub, setVerifySub] = useState('requests');
+  const [verifySub, setVerifySub] = useState('group_requests');
 
-  // data
   const [groups, setGroups] = useState([]);
   const [usersList, setUsersList] = useState([]);
   const [members, setMembers] = useState([]);
   const [groupReviews, setGroupReviews] = useState([]);
+  const [memberReviews, setMemberReviews] = useState([]);
   const [verifyRequests, setVerifyRequests] = useState([]);
   const [ads, setAds] = useState([]);
 
-  // selections
-  const [selectedGroup, setSelectedGroup] = useState(null);
-  const [showReviews, setShowReviews] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [profileView, setProfileView] = useState(null); // { type:'user'|'group', data:{...}, request? }
   const [receiptView, setReceiptView] = useState(null);
 
-  // settings/forms
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
   const [announcementText, setAnnouncementText] = useState('');
   const [announcementMedia, setAnnouncementMedia] = useState(null);
@@ -77,11 +75,12 @@ export default function OwnerPanel() {
 
   const handleMenuClick = (menu) => {
     setActiveMenu(menu);
-    setSelectedGroup(null); setSelectedUser(null); setShowReviews(false); setReceiptView(null);
+    setProfileView(null); setReceiptView(null);
     setMsg(''); setErr('');
     setSidebarOpen(false);
   };
 
+  // NOTE: login is NOT persisted — the owner panel always asks for the password
   useEffect(() => {
     (async () => {
       try {
@@ -100,8 +99,6 @@ export default function OwnerPanel() {
           });
         }
       } catch {}
-      const stored = localStorage.getItem('payround_owner_user');
-      if (stored) { try { const u = JSON.parse(stored); if (OWNER_EMAILS.includes(u.email?.toLowerCase())) { setUser(u); setIsOwner(true); } } catch {} }
     })();
   }, []);
 
@@ -113,6 +110,7 @@ export default function OwnerPanel() {
     setUsersList(await safe(supabase.from('users').select('*').order('created_at', { ascending: false })));
     setMembers(await safe(supabase.from('members').select('*')));
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
+    setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
     setAds(await safe(supabase.from('ads').select('*')));
   };
@@ -121,7 +119,7 @@ export default function OwnerPanel() {
     try { await supabase.from('notifications').insert({ id: `${type}-${Date.now()}`, type, group_id: groupId || null, message }); } catch {}
   };
 
-  /* ---------- AUTH ---------- */
+  /* ---------- AUTH (no persistence — password required every visit) ---------- */
   const handleLogin = async (e) => {
     e.preventDefault();
     setErr(''); setMsg('');
@@ -131,42 +129,98 @@ export default function OwnerPanel() {
     try {
       const hash = await sha256Hex(password);
       if (hash !== pwHash) { setErr('Invalid password.'); return; }
-      const u = { email: em, name: 'PayRound Owner' };
-      localStorage.setItem('payround_owner_user', JSON.stringify(u));
-      setUser(u); setIsOwner(true);
+      setUser({ email: em, name: 'PayRound Owner' });
+      setIsOwner(true);
     } catch { setErr('Login failed in this browser. Use HTTPS.'); }
     finally { setBusy(false); }
   };
 
   const handleLogout = async () => {
     try { await supabase.auth?.signOut?.(); } catch {}
-    localStorage.removeItem('payround_owner_user');
-    setUser(null); setIsOwner(false); setPassword(''); setMsg(''); setErr('');
-    setSidebarOpen(false); setActiveMenu('dashboard');
+    setIsOwner(false); setUser(null); setPassword(''); setEmail('');
+    setMsg(''); setErr(''); setProfileView(null); setSidebarOpen(false); setActiveMenu('dashboard');
   };
 
-  /* ---------- ACTIONS ---------- */
+  /* ---------- GROUP appprove/decline ---------- */
   const approveGroup = async (g) => {
     setBusy(true);
     try {
-      const { error } = await supabase.from('groups').update({ status: 'active', is_verified: true }).eq('id', g.id);
+      const { error } = await supabase.from('groups').update({ status: 'active' }).eq('id', g.id);
       if (error) throw error;
       await notify('group_approved', g.id, `Group "${g.name}" approved and is now live.`);
-      setMsg(`"${g.name}" approved — now live on the user site.`); loadData();
+      setMsg(`"${g.name}" approved — now live on the user site. (⭐ verification badge is separate — set it in the Verification tab.)`);
+      setProfileView(null); loadData();
     } catch (e) { setErr(`Approve failed: ${e.message}`); }
     setBusy(false);
   };
 
-  const rejectGroup = async (g) => {
-    const reason = window.prompt(`Reason for rejecting "${g.name}" (shown to the group admin):`, 'Requirements not met');
+  const declineGroup = async (g) => {
+    const reason = window.prompt(`Reason for declining "${g.name}" (shown to the group admin):`, 'Requirements not met');
     if (reason === null) return;
     setBusy(true);
     try {
       const { error } = await supabase.from('groups').update({ status: 'rejected', rejection_reason: reason }).eq('id', g.id);
       if (error) throw error;
       await notify('group_rejected', g.id, `Group "${g.name}" was declined: ${reason}`);
-      setMsg(`"${g.name}" rejected.`); loadData();
-    } catch (e) { setErr(`Reject failed: ${e.message}`); }
+      setMsg(`"${g.name}" declined.`); setProfileView(null); loadData();
+    } catch (e) { setErr(`Decline failed: ${e.message}`); }
+    setBusy(false);
+  };
+
+  /* ---------- USER approve/decline (approval only — blue badge comes from Verification tab) ---------- */
+  const approveUser = async (u) => {
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('users').update({ is_approved: true, approval_status: 'approved' }).eq('id', u.id);
+      if (error) throw error;
+      await notify('user_approved', null, `Welcome! Your PayRound account has been approved.`);
+      setMsg(`${u.name || u.email} approved (active user). 🔵 Blue badge is only granted from the Verification tab.`);
+      setProfileView(null); loadData();
+    } catch (e) { setErr(`Approve failed: ${e.message}. If it mentions "is_approved", run the v1.3 migration SQL.`); }
+    setBusy(false);
+  };
+
+  const declineUser = async (u) => {
+    const reason = window.prompt(`Reason for declining ${u.name || u.email}:`, 'Could not verify your account details');
+    if (reason === null) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('users').update({ is_approved: false, approval_status: 'declined', decline_reason: reason }).eq('id', u.id);
+      if (error) throw error;
+      await notify('user_declined', null, `Your account approval was declined: ${reason}. You may contact support.`);
+      setMsg(`${u.name || u.email} declined.`);
+      setProfileView(null); loadData();
+    } catch (e) { setErr(`Decline failed: ${e.message}. If it mentions "approval_status", run the v1.3 migration SQL.`); }
+    setBusy(false);
+  };
+
+  /* ---------- VERIFICATION requests (groups & users) ---------- */
+  const reviewVerification = async (req, verify) => {
+    setBusy(true);
+    const subjectName = req.subject_type === 'user' ? (req.user_name || req.user_email) : (req.group_name || req.group_id);
+    const reason = verify ? '' : (window.prompt('Reason for declining (shown to them):', 'Not eligible for verification') ?? '');
+    if (!verify && reason === null) { setBusy(false); return; }
+    try {
+      const { error } = await supabase.from('verification_requests').update({
+        status: verify ? 'approved' : 'declined',
+        reviewed_at: new Date().toISOString(),
+        decline_reason: verify ? null : (reason || null),
+      }).eq('id', req.id);
+      if (error) throw error;
+      if (verify) {
+        if (req.subject_type === 'user' && req.user_email) {
+          await supabase.from('users').update({ is_verified: true }).eq('email', req.user_email);
+        } else if (req.group_id) {
+          await supabase.from('groups').update({ is_verified: true }).eq('id', req.group_id);
+        }
+      }
+      await notify(verify ? 'verification_approved' : 'verification_declined', req.group_id || null,
+        verify
+          ? `✅ Verification approved for ${subjectName}.`
+          : `Verification for ${subjectName} was denied${reason ? `: ${reason}` : ' because you are not eligible for verification'}. You can re-apply after 7 days.`);
+      setMsg(`${subjectName} ${verify ? 'verified 🔵' : 'declined'} — they get a notification on the user site.`);
+      setProfileView(null); loadData();
+    } catch (e) { setErr(`Review failed: ${e.message}. If it mentions a column, run the v1.3 migration SQL.`); }
     setBusy(false);
   };
 
@@ -175,53 +229,19 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('groups').update({ badge_tier: tier, is_verified: true }).eq('id', g.id);
       if (error) throw error;
-      setMsg(`Badge for "${g.name}" updated to ${tier}.`);
-      setSelectedGroup({ ...selectedGroup, badge_tier: tier, is_verified: true });
+      setMsg(`Badge for "${g.name}" updated to ${tier} ${badgeEmoji(tier)}.`);
+      setProfileView({ ...profileView, data: { ...profileView.data, badge_tier: tier, is_verified: true } });
       loadData();
     } catch (e) { setErr(`Badge update failed: ${e.message}`); }
     setBusy(false);
   };
 
-  const approveUser = async (u) => {
-    setBusy(true);
-    try {
-      const { error } = await supabase.from('users').update({ is_verified: true }).eq('id', u.id);
-      if (error) throw error;
-      await notify('user_approved', null, `User ${u.name || u.email} verified with blue badge.`);
-      setMsg(`${u.name || u.email} approved — blue verification badge granted.`); loadData();
-    } catch (e) { setErr(`Approve failed: ${e.message}. If it mentions "is_verified", run the migration SQL.`); }
-    setBusy(false);
-  };
-
-  const reviewVerification = async (req, approve) => {
-    setBusy(true);
-    const verdict = approve ? 'approved' : 'declined';
-    const reason = approve ? '' : (window.prompt('Reason for declining (optional):', 'Not eligible for verification') ?? '');
-    if (!approve && reason === null) { setBusy(false); return; }
-    try {
-      const { error } = await supabase.from('verification_requests').update({ status: verdict, reviewed_at: new Date().toISOString(), decline_reason: reason || null }).eq('id', req.id);
-      if (error) throw error;
-      if (approve && req.group_id) {
-        await supabase.from('groups').update({ is_verified: true }).eq('id', req.group_id);
-      }
-      await notify(approve ? 'verification_approved' : 'verification_declined', req.group_id || null,
-        approve
-          ? `Verification request for "${req.group_name || req.group_id}" has been approved.`
-          : `Verification request for "${req.group_name || req.group_id}" was denied${reason ? `: ${reason}` : ' because it is not eligible for verification'}. You can re-apply after 7 days.`);
-      setMsg(`Request ${verdict} — the group admin will see a notification on the user site.`);
-      loadData();
-    } catch (e) { setErr(`Review failed: ${e.message}. If it mentions "verification_requests", run the migration SQL.`); }
-    setBusy(false);
-  };
-
+  /* ---------- SETTINGS / BANK / ANNOUNCEMENTS ---------- */
   const saveBankDetails = async () => {
     setBusy(true); setErr('');
     try {
       const { error } = await supabase.from('owner_settings').update({
-        bank_name: bankDetails.bankName.trim(),
-        account_number: bankDetails.accountNumber.trim(),
-        account_name: bankDetails.accountName.trim(),
-        updated_at: new Date().toISOString(),
+        bank_name: bankDetails.bankName.trim(), account_number: bankDetails.accountNumber.trim(), account_name: bankDetails.accountName.trim(), updated_at: new Date().toISOString(),
       }).eq('id', 1);
       if (error) throw error;
       setMsg('Bank details saved — visible on the user site immediately.');
@@ -235,15 +255,13 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('owner_settings').update({
         subscription_months: Number(siteControls.subscriptionMonths) || 4,
-        stats_users_override: num(siteControls.statsUsers),
-        stats_groups_override: num(siteControls.statsGroups),
-        stats_saved_override: num(siteControls.statsSaved),
-        stats_satisfaction_override: num(siteControls.statsSatisfaction),
+        stats_users_override: num(siteControls.statsUsers), stats_groups_override: num(siteControls.statsGroups),
+        stats_saved_override: num(siteControls.statsSaved), stats_satisfaction_override: num(siteControls.statsSatisfaction),
         updated_at: new Date().toISOString(),
       }).eq('id', 1);
       if (error) throw error;
       setMsg('Site controls saved — the user site picks these up on next load.');
-    } catch (e) { setErr(`Save failed: ${e.message}. If it mentions "stats_" or "subscription_months", run the migration SQL.`); }
+    } catch (e) { setErr(`Save failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -261,15 +279,13 @@ export default function OwnerPanel() {
         } catch {}
       }
       const { error } = await supabase.from('owner_settings').update({
-        announcement_text: announcementText.trim(),
-        announcement_media_url: mediaUrl,
-        announcement_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        announcement_text: announcementText.trim(), announcement_media_url: mediaUrl,
+        announcement_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       }).eq('id', 1);
       if (error) throw error;
       setAnnouncementMedia(mediaUrl); setAnnouncementFile(null);
-      setMsg('Announcement published — it pops up at the top of the user site until you clear it.');
-    } catch (e) { setErr(`Publish failed: ${e.message}. If it mentions "announcement_", run the migration SQL.`); }
+      setMsg('Announcement published — pops up at the top of the user site until you clear it.');
+    } catch (e) { setErr(`Publish failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -299,7 +315,7 @@ export default function OwnerPanel() {
       setPwHash(newHash);
       setPwForm({ current: '', next: '', confirm: '' });
       setMsg('Password changed — applies to both owner emails.');
-    } catch (e) { setErr(`Change failed: ${e.message}. If it mentions "owner_password_hash", run the migration SQL.`); }
+    } catch (e) { setErr(`Change failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -311,7 +327,7 @@ export default function OwnerPanel() {
           <div className="text-center mb-6">
             <div className="w-14 h-14 bg-purple-700 rounded-xl flex items-center justify-center mx-auto mb-3 text-white font-bold text-xl">P</div>
             <h1 className="text-xl font-bold">PayRound Owner</h1>
-            <p className="text-xs text-gray-500 mt-1">Admin control panel — restricted access</p>
+            <p className="text-xs text-gray-500 mt-1">Admin control panel — password required every visit</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-3">
             <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Owner Email" type="email" required className="w-full border rounded-xl px-4 py-3 text-sm" />
@@ -328,22 +344,28 @@ export default function OwnerPanel() {
   const activeGroups = groups.filter(g => g.status === 'active');
   const pendingGroups = groups.filter(g => g.status === 'pending_owner');
   const frozenGroups = groups.filter(g => ['frozen', 'trial_frozen'].includes(g.status));
-  const activeUsers = usersList.filter(u => u.is_verified);
-  const pendingUsers = usersList.filter(u => !u.is_verified);
-  const pendingVerify = verifyRequests.filter(r => r.status === 'pending');
-  const reviewedVerify = verifyRequests.filter(r => r.status !== 'pending');
+  const verifiedGroups = groups.filter(g => g.is_verified);
+  const isUserApproved = (u) => u.is_approved === true || u.approval_status === 'approved';
+  const isUserDeclined = (u) => u.approval_status === 'declined';
+  const activeUsers = usersList.filter(isUserApproved);
+  const pendingUsers = usersList.filter(u => !isUserApproved(u));
+  const verifiedUsers = usersList.filter(u => u.is_verified);
+  const groupRequests = verifyRequests.filter(r => (r.subject_type || 'group') === 'group' && r.status === 'pending');
+  const userRequests = verifyRequests.filter(r => r.subject_type === 'user' && r.status === 'pending');
   const groupMembers = (gid) => members.filter(m => m.group_id === gid && m.status === 'approved');
   const groupRatings = (gid) => groupReviews.filter(r => r.group_id === gid);
   const avgRating = (gid) => { const rs = groupRatings(gid); return rs.length ? (rs.reduce((a, r) => a + (r.rating || 0), 0) / rs.length) : 0; };
   const refId = (u) => (u.id || '').slice(0, 8);
   const referredUsers = (u) => usersList.filter(x => x.referred_by && (x.referred_by === u.id || x.referred_by === refId(u)));
+  const userAdminGroups = (u) => groups.filter(g => g.admin_email === u.email);
+  const userMemberGroups = (u) => members.filter(m => m.member_email === u.email && m.status === 'approved');
+  const userReviews = (u) => memberReviews.filter(r => r.member_email === u.email);
   const transactions = [
     ...groups.filter(g => g.creation_receipt_url).map(g => ({ id: `c-${g.id}`, type: 'Group creation fee', from: g.admin_email, name: g.name, amount: 5000, date: g.first_payment_at || g.created_at, receipt: g.creation_receipt_url })),
     ...groups.filter(g => g.renewal_receipt_url).map(g => ({ id: `r-${g.id}`, type: 'Group renewal', from: g.admin_email, name: g.name, amount: 5000, date: g.expiry_at || g.created_at, receipt: g.renewal_receipt_url })),
     ...ads.map(a => ({ id: `a-${a.id}`, type: 'Ad placement', from: a.submitter_email, name: a.business_name, amount: a.price, date: a.submitted_at, receipt: a.payment_receipt_url })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
-  // users growth: registrations per day, last 14 days
   const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - (13 - i)); return d; });
   const growth = days.map(d => {
     const key = d.toDateString();
@@ -364,7 +386,7 @@ export default function OwnerPanel() {
   );
 
   const sidebar = (
-    <aside className={`bg-gradient-to-b from-[#26224f] via-[#1e1b4b] to-[#141138] text-white flex flex-col h-full overflow-y-auto border-r-4 border-purple-500/40 shadow-[10px_0_30px_rgba(20,17,56,0.55)] ${sidebarOpen ? '' : ''}`}>
+    <aside className="bg-gradient-to-b from-[#26224f] via-[#1e1b4b] to-[#141138] text-white flex flex-col h-full overflow-y-auto border-r-4 border-purple-500/40 shadow-[10px_0_30px_rgba(20,17,56,0.55)]">
       <div className="p-5 border-b border-white/10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -388,7 +410,7 @@ export default function OwnerPanel() {
         {menuBtn(MENU[0])}
         {menuBtn(MENU[1], pendingGroups.length)}
         {menuBtn(MENU[2], pendingUsers.length)}
-        {menuBtn(MENU[3], pendingVerify.length)}
+        {menuBtn(MENU[3], groupRequests.length + userRequests.length)}
         {MENU.slice(4).map(m => menuBtn(m))}
       </nav>
 
@@ -400,25 +422,33 @@ export default function OwnerPanel() {
         <button onClick={handleLogout} className="w-full flex items-center justify-between px-3 py-3 text-sm rounded-xl text-white/80 bg-red-900/40 hover:bg-red-900/60 border-b-2 border-red-950 shadow-[0_4px_0_rgba(0,0,0,0.4)] active:shadow-none active:translate-y-[3px] transition-all">
           <span className="flex items-center gap-3">↩️ Log Out</span><span>›</span>
         </button>
-        <div className="text-[9px] text-white/20 px-3 pt-1">Owner Dashboard v1.2</div>
+        <div className="text-[9px] text-white/20 px-3 pt-1">Owner Dashboard v1.3</div>
       </div>
     </aside>
   );
 
   const subPills = (options, value, set) => (
-    <div className="flex gap-2 bg-white p-1.5 rounded-full border w-fit shadow-sm">
+    <div className="flex flex-wrap gap-1.5 bg-white p-1.5 rounded-2xl border w-fit shadow-sm">
       {options.map(o => (
-        <button key={o.id} onClick={() => set(o.id)} className={`px-4 py-2 rounded-full text-xs font-semibold transition-colors ${value === o.id ? 'bg-purple-700 text-white shadow' : 'text-gray-600 hover:bg-gray-100'}`}>
+        <button key={o.id} onClick={() => set(o.id)} className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors ${value === o.id ? 'bg-purple-700 text-white shadow' : 'text-gray-600 hover:bg-gray-100'}`}>
           {o.label}{o.count !== undefined ? ` (${o.count})` : ''}
         </button>
       ))}
     </div>
   );
 
-  /* ---------- DASHBOARD ---------- */
+  const infoRow = (label, value) => (
+    <div className="flex justify-between gap-3 text-xs border-b last:border-0 py-2">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-medium text-right break-all">{value ?? '—'}</span>
+    </div>
+  );
+
+  const sub = verifySub;
+
+  /* ---------- RENDER ---------- */
   return (
     <div className="min-h-screen bg-gray-50 lg:grid lg:grid-cols-[minmax(250px,20%)_1fr]">
-      {/* Desktop: purple 3D tab always visible, top-to-bottom, 20% width. Mobile: slide-over */}
       <div className="hidden lg:block sticky top-0 h-screen">{sidebar}</div>
       {sidebarOpen && <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/50 z-30 lg:hidden" />}
       <div className={`fixed inset-y-0 left-0 z-40 w-[80%] max-w-[320px] transform transition-transform duration-300 lg:hidden ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>{sidebar}</div>
@@ -449,12 +479,12 @@ export default function OwnerPanel() {
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Users Registered</div>
                   <div className="font-bold text-3xl mt-1">{usersList.length}</div>
-                  <div className="text-[10px] text-green-600 mt-1">{activeUsers.length} verified • {pendingUsers.length} pending</div>
+                  <div className="text-[10px] text-green-600 mt-1">{activeUsers.length} approved • {verifiedUsers.length} blue-verified • {pendingUsers.length} pending</div>
                 </div>
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Active Groups</div>
                   <div className="font-bold text-3xl mt-1">{activeGroups.length}</div>
-                  <div className="text-[10px] text-green-600 mt-1">Live on user site</div>
+                  <div className="text-[10px] text-green-600 mt-1">{verifiedGroups.length} verified • {pendingGroups.length} pending</div>
                 </div>
               </div>
 
@@ -488,32 +518,30 @@ export default function OwnerPanel() {
                 <h3 className="font-bold mb-3">Active Groups</h3>
                 {activeGroups.length > 0 ? activeGroups.map(g => (
                   <div key={g.id} className="flex justify-between items-center gap-3 border-b last:border-0 py-3 text-sm">
-                    <div className="min-w-0"><span className="font-medium">{g.name}</span> <span className="text-xs text-gray-500 block sm:inline">ID: {g.id} • ₦{Number(g.amount).toLocaleString()} {g.frequency} • {groupMembers(g.id).length || g.max_members} members • <Stars n={Math.round(avgRating(g.id))} /> • Badge: {g.badge_tier || 'Bronze'}</span></div>
-                    <button onClick={() => { setSelectedGroup(g); setShowReviews(false); }} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
+                    <div className="min-w-0"><span className="font-medium">{g.name}</span> {g.is_verified && <BlueBadge />} <span className="text-xs text-gray-500 block sm:inline">ID: {g.id} • ₦{Number(g.amount).toLocaleString()} {g.frequency} • {groupMembers(g.id).length || g.max_members} members • <Stars n={Math.round(avgRating(g.id))} /> • Badge: {badgeEmoji(g.badge_tier)} {g.badge_tier || 'Bronze'}</span></div>
+                    <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
                   </div>
                 )) : <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No active groups yet — groups appear here after you approve them in the Groups tab.</div>}
               </div>
-
-              {selectedGroup && renderGroupProfile()}
             </>
           )}
 
           {/* 2. GROUPS */}
           {activeMenu === 'groups' && (
             <div className="space-y-4">
-              {subPills([{ id: 'active', label: 'Active Groups', count: activeGroups.length }, { id: 'pending', label: 'Pending Approval', count: pendingGroups.length }], groupsSub, setGroupsSub)}
+              {subPills([{ id: 'active', label: '✅ Active Groups', count: activeGroups.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingGroups.length }], groupsSub, setGroupsSub)}
 
               {groupsSub === 'active' && (
                 <div className="bg-white rounded-xl border p-5">
                   <h3 className="font-bold mb-1">Active Groups</h3>
-                  <p className="text-xs text-gray-500 mb-3">Approved by you and visible to users on the user site. Click one to see its profile, admin, members, rating and reviews.</p>
+                  <p className="text-xs text-gray-500 mb-3">Approved and visible on the user site. Click one to see its full profile, admin, members, rating and reviews.</p>
                   {activeGroups.map(g => (
                     <div key={g.id} className="border-b last:border-0 py-3 text-sm flex justify-between items-center gap-3">
                       <div className="min-w-0">
-                        <div className="font-medium">{g.name} <span className="text-xs text-gray-500">• ID: {g.id}</span></div>
-                        <div className="text-xs text-gray-500">Admin: {g.admin_name || g.admin_email} • {groupMembers(g.id).length || g.max_members} members • <Stars n={Math.round(avgRating(g.id))} /> ({groupRatings(g.id).length} reviews) • Badge: {g.badge_tier || 'Bronze'}</div>
+                        <div className="font-medium">{g.name} {g.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">• ID: {g.id}</span></div>
+                        <div className="text-xs text-gray-500">Admin: {g.admin_name || g.admin_email} • <Stars n={Math.round(avgRating(g.id))} /> ({groupRatings(g.id).length} reviews) • Badge: {badgeEmoji(g.badge_tier)} {g.badge_tier || 'Bronze'}</div>
                       </div>
-                      <button onClick={() => { setSelectedGroup(g); setShowReviews(false); }} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
+                      <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
                     </div>
                   ))}
                   {activeGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No active groups yet.</div>}
@@ -523,27 +551,21 @@ export default function OwnerPanel() {
               {groupsSub === 'pending' && (
                 <div className="bg-white rounded-xl border p-5">
                   <h3 className="font-bold mb-1">Pending Groups</h3>
-                  <p className="text-xs text-gray-500 mb-3">Review KYC (selfie + ID + receipt) before approving. Approved groups go live on the user site immediately.</p>
+                  <p className="text-xs text-gray-500 mb-3">View the full profile (KYC, details) before deciding. Approved groups go live immediately.</p>
                   {pendingGroups.map(g => (
                     <div key={g.id} className="border rounded-xl p-3 mb-3">
                       <div className="font-medium text-sm">{g.name} <span className="text-xs text-gray-500">• {g.admin_email}</span></div>
                       <div className="text-xs text-gray-500 mt-1">₦{Number(g.amount).toLocaleString()} {g.frequency} • {g.max_members} members • Color: <span className="inline-block w-3 h-3 rounded-full align-middle" style={{ background: g.color }} /></div>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {g.selfie_url && <a href={g.selfie_url} target="_blank" rel="noreferrer" className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Selfie</a>}
-                        {g.id_url && <a href={g.id_url} target="_blank" rel="noreferrer" className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">ID</a>}
-                        {g.creation_receipt_url && <a href={g.creation_receipt_url} target="_blank" rel="noreferrer" className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Receipt</a>}
-                      </div>
-                      <div className="flex gap-2 mt-3">
-                        <button disabled={busy} onClick={() => approveGroup(g)} className="bg-black hover:bg-gray-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Approve → Go Live</button>
-                        <button disabled={busy} onClick={() => rejectGroup(g)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1 rounded-full text-xs disabled:opacity-60">Reject</button>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        <button disabled={busy} onClick={() => approveGroup(g)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve → Go Live</button>
+                        <button disabled={busy} onClick={() => declineGroup(g)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>
                       </div>
                     </div>
                   ))}
                   {pendingGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No groups waiting for review.</div>}
                 </div>
               )}
-
-              {selectedGroup && renderGroupProfile()}
             </div>
           )}
 
@@ -552,51 +574,36 @@ export default function OwnerPanel() {
             <div className="bg-white rounded-xl border p-6 space-y-4">
               <div>
                 <h3 className="font-bold mb-1">Users</h3>
-                <p className="text-xs text-gray-500">Every user has a unique ID and a referral link containing it. The blue verification badge is granted only by you.</p>
+                <p className="text-xs text-gray-500">View a user's full profile before approving. Approving activates their account — the 🔵 blue verification badge is granted only from the Verification tab.</p>
               </div>
-              {subPills([{ id: 'active', label: 'Active Users', count: activeUsers.length }, { id: 'pending', label: 'Pending Approval', count: pendingUsers.length }], usersSub, setUsersSub)}
+              {subPills([{ id: 'active', label: '✅ Active Users', count: activeUsers.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingUsers.length }], usersSub, setUsersSub)}
 
               <div className="grid md:grid-cols-2 gap-4">
                 {usersSub === 'active' ? (
                   activeUsers.length > 0 ? activeUsers.map(u => (
-                    <button key={u.id} onClick={() => setSelectedUser(selectedUser?.id === u.id ? null : u)} className={`text-left border rounded-xl p-4 hover:border-purple-400 transition-colors ${selectedUser?.id === u.id ? 'border-purple-500 bg-purple-50/50' : ''}`}>
-                      <div className="font-medium text-sm">{u.name || '—'} <span className="inline-block w-4 h-4 bg-blue-500 text-white rounded-full text-[9px] text-center leading-4 align-middle" title="Blue verified">✓</span></div>
+                    <div key={u.id} className="border rounded-xl p-4">
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
-                    </button>
-                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No verified users yet — approve users from the pending list.</div>
+                      <button onClick={() => setProfileView({ type: 'user', data: u })} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                    </div>
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No approved users yet — approve users from the pending list.</div>
                 ) : (
                   pendingUsers.length > 0 ? pendingUsers.map(u => (
-                    <div key={u.id} className="border rounded-xl p-4">
-                      <div className="font-medium text-sm">{u.name || '—'}</div>
+                    <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
+                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email} • Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</div>
-                      <button disabled={busy} onClick={() => approveUser(u)} className="mt-2 bg-black hover:bg-gray-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Approve → Blue Badge</button>
+                      {u.decline_reason && <div className="text-[11px] text-red-600 mt-1">Reason: {u.decline_reason}</div>}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <button onClick={() => setProfileView({ type: 'user', data: u })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        <button disabled={busy} onClick={() => approveUser(u)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve</button>
+                        {!isUserDeclined(u) && <button disabled={busy} onClick={() => declineUser(u)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>}
+                      </div>
                     </div>
                   )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No users waiting for approval.</div>
                 )}
               </div>
-
-              {selectedUser && (
-                <div className="border rounded-2xl p-5 bg-gray-50">
-                  <div className="flex justify-between items-start gap-3">
-                    <div>
-                      <div className="font-bold">{selectedUser.name || '—'} <span className="inline-block w-4 h-4 bg-blue-500 text-white rounded-full text-[9px] text-center leading-4 align-middle">✓</span></div>
-                      <div className="text-xs text-purple-700 font-mono font-bold">Unique ID: {refId(selectedUser)}</div>
-                      <div className="text-xs text-gray-500 mt-1">{selectedUser.email} {selectedUser.phone ? `• ${selectedUser.phone}` : ''} • Joined {selectedUser.created_at ? new Date(selectedUser.created_at).toLocaleDateString() : '—'}</div>
-                    </div>
-                    <button onClick={() => setSelectedUser(null)} className="text-xs border rounded-full px-3 py-1 bg-white hover:bg-gray-100">Close</button>
-                  </div>
-                  <div className="mt-3 text-xs">
-                    <div className="font-bold mb-1">Referral link (auto-fills "Referred by" on signup)</div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <code className="bg-white border rounded-lg px-2 py-1 break-all">https://{USER_REF}{refId(selectedUser)}</code>
-                      <button onClick={() => { navigator.clipboard?.writeText(`https://${USER_REF}${refId(selectedUser)}`); setMsg('Referral link copied.'); }} className="border rounded-full px-3 py-1 bg-white hover:bg-gray-100">Copy</button>
-                    </div>
-                    <div className="text-gray-500 mt-2">{referredUsers(selectedUser).length} users referred • ₦{(referredUsers(selectedUser).length * 200).toLocaleString()} earned (must be a member of at least 1 group to withdraw)</div>
-                  </div>
-                </div>
-              )}
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
                 Referral: ₦200 per new user who registers with their link — only if the referrer is a member of at least 1 group. Minimum withdrawal ₦1,000 (5 referrals).
@@ -604,52 +611,97 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 4. VERIFICATION */}
+          {/* 4. VERIFICATION — 4 categories */}
           {activeMenu === 'verification' && (
             <div className="bg-white rounded-xl border p-6 space-y-4">
               <div>
                 <h3 className="font-bold mb-1">Verification</h3>
-                <p className="text-xs text-gray-500">Groups submit images explaining why they should be verified. Your decision notifies the admin on the user site. A declined group can re-apply after 7 days.</p>
+                <p className="text-xs text-gray-500">Review the profile and evidence first, then Verify or Decline. Verified groups get the badge — Bronze 🥉 / Silver 🥈 / Gold 🥇 (set from their profile). Verified users get the 🔵 blue badge. Declined requests can re-apply after 7 days. Everyone is notified on the user site.</p>
               </div>
-              {subPills([{ id: 'requests', label: 'Requests', count: pendingVerify.length }, { id: 'reviewed', label: 'Reviewed', count: reviewedVerify.length }], verifySub, setVerifySub)}
+              {subPills([
+                { id: 'group_requests', label: '👥 Group Requests', count: groupRequests.length },
+                { id: 'user_requests', label: '👤 User Requests', count: userRequests.length },
+                { id: 'verified_groups', label: '🏅 Verified Groups', count: verifiedGroups.length },
+                { id: 'verified_users', label: '🔵 Verified Users', count: verifiedUsers.length },
+              ], verifySub, setVerifySub)}
 
-              {verifySub === 'requests' && (
-                pendingVerify.length > 0 ? pendingVerify.map(r => (
-                  <div key={r.id} className="border rounded-xl p-4 mb-3">
-                    <div className="font-medium text-sm">{r.group_name || r.group_id} <span className="text-xs text-gray-500">• {r.admin_email}</span></div>
-                    <div className="text-xs text-gray-500 mt-1">Submitted {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</div>
-                    {r.reason && <p className="text-sm mt-2 bg-gray-50 rounded-lg p-3">{r.reason}</p>}
-                    {r.images && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {String(r.images).split(',').filter(Boolean).map((img, i) => (
-                          <a key={i} href={img.trim()} target="_blank" rel="noreferrer"><img src={img.trim()} alt={`evidence ${i + 1}`} className="w-16 h-16 object-cover rounded-lg border hover:opacity-80" /></a>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex gap-2 mt-3">
-                      <button disabled={busy} onClick={() => reviewVerification(r, true)} className="bg-black hover:bg-gray-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Approve → Notified</button>
-                      <button disabled={busy} onClick={() => reviewVerification(r, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1 rounded-full text-xs disabled:opacity-60">Decline → Notified</button>
-                    </div>
-                  </div>
-                )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No verification requests waiting.</div>
-              )}
-
-              {verifySub === 'reviewed' && (
-                reviewedVerify.length > 0 ? reviewedVerify.map(r => {
-                  const reapply = r.reviewed_at ? new Date(new Date(r.reviewed_at).getTime() + 7 * 864e5) : null;
+              {/* Group verification requests */}
+              {sub === 'group_requests' && (
+                groupRequests.length > 0 ? groupRequests.map(r => {
+                  const g = groups.find(x => x.id === r.group_id);
                   return (
-                    <div key={r.id} className="border rounded-xl p-4 mb-2 text-sm flex flex-wrap justify-between gap-2">
-                      <div>
-                        <div className="font-medium">{r.group_name || r.group_id}</div>
-                        <div className="text-xs text-gray-500">Reviewed {r.reviewed_at ? new Date(r.reviewed_at).toLocaleString() : '—'}{r.decline_reason ? ` • ${r.decline_reason}` : ''}</div>
-                      </div>
-                      <div className="text-right">
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full ${r.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{r.status}</span>
-                        {r.status === 'declined' && reapply && <div className="text-[10px] text-gray-400 mt-1">Can re-apply after {reapply.toLocaleDateString()}</div>}
+                    <div key={r.id} className="border rounded-xl p-4 mb-3">
+                      <div className="font-medium text-sm">{r.group_name || g?.name || r.group_id} <span className="text-xs text-gray-500">• {r.admin_email || g?.admin_email}</span></div>
+                      <div className="text-xs text-gray-500 mt-1">Submitted {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</div>
+                      {r.reason && <p className="text-sm mt-2 bg-gray-50 rounded-lg p-3">{r.reason}</p>}
+                      {r.images && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {String(r.images).split(',').filter(Boolean).map((img, i) => (
+                            <a key={i} href={img.trim()} target="_blank" rel="noreferrer"><img src={img.trim()} alt={`evidence ${i + 1}`} className="w-16 h-16 object-cover rounded-lg border hover:opacity-80" /></a>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {g && <button onClick={() => setProfileView({ type: 'group', data: g, request: r })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile First</button>}
+                        <button disabled={busy} onClick={() => reviewVerification(r, true)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Verify</button>
+                        <button disabled={busy} onClick={() => reviewVerification(r, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>
                       </div>
                     </div>
                   );
-                }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">Nothing reviewed yet.</div>
+                }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No group verification requests waiting.</div>
+              )}
+
+              {/* User verification requests */}
+              {sub === 'user_requests' && (
+                userRequests.length > 0 ? userRequests.map(r => {
+                  const u = usersList.find(x => x.email === r.user_email);
+                  return (
+                    <div key={r.id} className="border rounded-xl p-4 mb-3">
+                      <div className="font-medium text-sm">{r.user_name || u?.name || r.user_email} <span className="text-xs text-gray-500">• {r.user_email}</span></div>
+                      <div className="text-xs text-gray-500 mt-1">Submitted {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</div>
+                      {r.reason && <p className="text-sm mt-2 bg-gray-50 rounded-lg p-3">{r.reason}</p>}
+                      {r.images && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {String(r.images).split(',').filter(Boolean).map((img, i) => (
+                            <a key={i} href={img.trim()} target="_blank" rel="noreferrer"><img src={img.trim()} alt={`evidence ${i + 1}`} className="w-16 h-16 object-cover rounded-lg border hover:opacity-80" /></a>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {u && <button onClick={() => setProfileView({ type: 'user', data: u, request: r })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile First</button>}
+                        <button disabled={busy} onClick={() => reviewVerification(r, true)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Verify → 🔵 Blue Badge</button>
+                        <button disabled={busy} onClick={() => reviewVerification(r, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>
+                      </div>
+                    </div>
+                  );
+                }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No user verification requests waiting.</div>
+              )}
+
+              {/* Verified groups */}
+              {sub === 'verified_groups' && (
+                verifiedGroups.length > 0 ? verifiedGroups.map(g => (
+                  <div key={g.id} className="border rounded-xl p-4 mb-2 flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                      <div className="font-medium text-sm">{g.name} {g.is_verified && <BlueBadge />}</div>
+                      <div className="text-xs text-gray-500">Admin: {g.admin_name || g.admin_email} • Badge: {badgeEmoji(g.badge_tier)} {g.badge_tier || 'Bronze'} • <Stars n={Math.round(avgRating(g.id))} /></div>
+                    </div>
+                    <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">View Profile →</button>
+                  </div>
+                )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No verified groups yet — verify from Group Requests.</div>
+              )}
+
+              {/* Verified users */}
+              {sub === 'verified_users' && (
+                verifiedUsers.length > 0 ? verifiedUsers.map(u => (
+                  <div key={u.id} className="border rounded-xl p-4 mb-2 flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                      <div className="font-medium text-sm">{u.name || '—'} <BlueBadge /></div>
+                      <div className="text-[11px] text-purple-700 font-mono font-bold">ID: {refId(u)}</div>
+                      <div className="text-xs text-gray-500">{u.email}</div>
+                    </div>
+                    <button onClick={() => setProfileView({ type: 'user', data: u })} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">View Profile →</button>
+                  </div>
+                )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No verified users yet — verify from User Requests.</div>
               )}
             </div>
           )}
@@ -697,21 +749,13 @@ export default function OwnerPanel() {
               </div>
               {usersList.filter(u => referredUsers(u).length > 0).length > 0 ? usersList.filter(u => referredUsers(u).length > 0).map(u => (
                 <div key={u.id} className="border rounded-xl p-4 mb-2">
-                  <button onClick={() => setSelectedUser(selectedUser?.id === u.id ? null : u)} className="w-full flex justify-between items-center text-left">
+                  <button onClick={() => setProfileView({ type: 'user', data: u })} className="w-full flex justify-between items-center text-left">
                     <div>
-                      <div className="font-medium text-sm">{u.name || u.email} <span className="text-xs text-gray-500">ID: {refId(u)}</span></div>
+                      <div className="font-medium text-sm">{u.name || u.email} {u.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">ID: {refId(u)}</span></div>
                       <div className="text-xs text-gray-500">{referredUsers(u).length} referred</div>
                     </div>
                     <div className="text-sm font-bold text-green-700">₦{(referredUsers(u).length * 200).toLocaleString()}</div>
                   </button>
-                  {selectedUser?.id === u.id && (
-                    <div className="mt-3 border-t pt-3">
-                      <div className="text-xs font-bold mb-2">Registered through their link:</div>
-                      {referredUsers(u).map(x => (
-                        <div key={x.id} className="text-xs text-gray-600 py-1 border-b last:border-0">{x.name || '—'} • {x.email} • {x.created_at ? new Date(x.created_at).toLocaleDateString() : '—'}</div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )) : <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No referral bonuses earned yet — this fills in automatically as people register with referral links.</div>}
             </div>
@@ -722,7 +766,7 @@ export default function OwnerPanel() {
             <div className="grid md:grid-cols-2 gap-6 items-start">
               <div className="bg-white rounded-xl border p-6">
                 <h3 className="font-bold mb-1">Change Password</h3>
-                <p className="text-xs text-gray-500 mb-4">Applies to both owner emails. Stored securely as a hash — never plain text.</p>
+                <p className="text-xs text-gray-500 mb-4">Applies to both owner emails. Stored securely as a hash — never plain text. Login is required on every visit.</p>
                 <div className="space-y-3">
                   <input value={pwForm.current} onChange={e => setPwForm({ ...pwForm, current: e.target.value })} placeholder="Current Password" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
                   <input value={pwForm.next} onChange={e => setPwForm({ ...pwForm, next: e.target.value })} placeholder="New Password (min 8 characters)" type="password" className="w-full border rounded-xl px-4 py-2 text-sm" />
@@ -783,6 +827,15 @@ export default function OwnerPanel() {
         </div>
       </main>
 
+      {/* ===== PROFILE MODAL (user or group) — review in detail before deciding ===== */}
+      {profileView && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setProfileView(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {profileView.type === 'group' ? renderGroupProfile(profileView.data, profileView.request) : renderUserProfile(profileView.data, profileView.request)}
+          </div>
+        </div>
+      )}
+
       {/* Receipt modal */}
       {receiptView && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setReceiptView(null)}>
@@ -804,55 +857,189 @@ export default function OwnerPanel() {
     </div>
   );
 
-  function renderGroupProfile() {
-    const g = selectedGroup;
+  /* ---------- PROFILE MODAL: GROUP ---------- */
+  function renderGroupProfile(g, request) {
     const gMembers = groupMembers(g.id);
     const ratings = groupRatings(g.id);
+    const isPending = g.status === 'pending_owner';
     return (
-      <div className="bg-white rounded-2xl border p-6 shadow-lg">
-        <div className="flex justify-between gap-3"><h3 className="font-bold">Group Profile: {g.name}</h3><button onClick={() => { setSelectedGroup(null); setShowReviews(false); }} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button></div>
-        <div className="mt-4 grid md:grid-cols-2 gap-4 text-sm">
+      <div>
+        <div className="flex justify-between items-start gap-3">
           <div>
-            <div className="font-bold">Group Info</div>
-            <div className="text-gray-600 mt-1">ID: {g.id} • ₦{Number(g.amount).toLocaleString()} {g.frequency} • Max {g.max_members} members • Badge: {g.badge_tier || 'Bronze'} {g.is_verified ? '✓' : ''}</div>
-            <div className="text-gray-600 mt-1"><Stars n={Math.round(avgRating(g.id))} /> {avgRating(g.id).toFixed(1)} ({ratings.length} reviews)</div>
-            {g.description && <div className="mt-2 text-gray-600 text-xs">About: {g.description}</div>}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button onClick={() => setShowReviews(!showReviews)} className="bg-black text-white px-3 py-1 rounded-full text-xs">⭐ Rating & Reviews</button>
-            </div>
+            <h3 className="font-bold text-lg">{g.name} {g.is_verified && <BlueBadge />} <span className="text-sm">{badgeEmoji(g.badge_tier)}</span></h3>
+            <div className="text-[11px] text-purple-700 font-mono font-bold">Group ID: {g.id}</div>
+          </div>
+          <button onClick={() => setProfileView(null)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
+          <span className={`px-2 py-0.5 rounded-full ${g.status === 'active' ? 'bg-green-100 text-green-700' : isPending ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>status: {g.status}</span>
+          {g.is_verified && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">verified</span>}
+          <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">badge: {g.badge_tier || 'Bronze'}</span>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-5 mt-4">
+          <div>
+            <div className="text-xs font-bold text-gray-500 mb-1">GROUP DETAILS</div>
+            {infoRow('Amount', `₦${Number(g.amount).toLocaleString()} ${g.frequency || ''}`)}
+            {infoRow('Max members', g.max_members)}
+            {infoRow('Members (approved)', gMembers.length)}
+            {infoRow('Color', <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block border" style={{ background: g.color }} /> {g.color}</span>)}
+            {infoRow('Rating', <span><Stars n={Math.round(avgRating(g.id))} /> {avgRating(g.id).toFixed(1)} ({ratings.length})</span>)}
+            {infoRow('Created', g.created_at ? new Date(g.created_at).toLocaleDateString() : '—')}
+            {g.description && <div className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-2"><span className="font-bold">About:</span> {g.description}</div>}
+            {Array.isArray(g.rules) && g.rules.length > 0 && <div className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-2"><span className="font-bold">Rules:</span> {g.rules.join(' • ')}</div>}
+            {g.rejection_reason && <div className="text-xs text-red-600 mt-2">Decline reason: {g.rejection_reason}</div>}
           </div>
           <div>
-            <div className="font-bold">Admin & Members</div>
-            <div className="text-gray-600 mt-1 text-xs">Admin: {g.admin_name || '—'} ({g.admin_email}) — visible to everyone. Admins can also join other groups as members. Admins must review a member's profile before approving them.</div>
-            <div className="text-gray-600 mt-1 text-xs">Announcements tab is controlled by the group admin only.</div>
-            <div className="mt-2">
-              <div className="text-xs font-bold mb-1">Members ({gMembers.length}) — visible in full to members only</div>
-              {gMembers.length > 0 ? gMembers.map(m => (
-                <div key={m.id} className="text-xs text-gray-600 border-b last:border-0 py-1">{m.member_name || m.member_email}</div>
-              )) : <div className="text-xs text-gray-400">No approved members recorded yet.</div>}
+            <div className="text-xs font-bold text-gray-500 mb-1">ADMIN</div>
+            {infoRow('Name', g.admin_name)}
+            {infoRow('Email', g.admin_email)}
+            <div className="text-[11px] text-gray-400 mt-1 mb-3">Everyone can see the group admin. Admins can also join other groups as members. Group announcements are controlled by the admin only; admins must review a member's profile before approving them.</div>
+
+            <div className="text-xs font-bold text-gray-500 mb-1">KYC & PAYMENT EVIDENCE</div>
+            <div className="flex flex-wrap gap-2">
+              {g.selfie_url
+                ? <a href={g.selfie_url} target="_blank" rel="noreferrer"><img src={g.selfie_url} alt="selfie" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No selfie</span>}
+              {g.id_url
+                ? <a href={g.id_url} target="_blank" rel="noreferrer"><img src={g.id_url} alt={`ID (${g.id_type || 'ID'})`} className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No ID</span>}
+              {g.creation_receipt_url
+                ? <a href={g.creation_receipt_url} target="_blank" rel="noreferrer"><img src={g.creation_receipt_url} alt="₦5,000 receipt" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No receipt</span>}
             </div>
+            <div className="text-[10px] text-gray-400 mt-1">Selfie • {g.id_type || 'ID'} • ₦5,000 payment receipt (click to enlarge)</div>
           </div>
         </div>
 
-        {showReviews && (
-          <div className="mt-4 border-t pt-4">
-            <div className="text-xs font-bold mb-2">Individual ratings & reviews (1–5 stars, visible to everyone)</div>
+        {/* Members */}
+        <div className="mt-4 border-t pt-3">
+          <div className="text-xs font-bold text-gray-500 mb-1">MEMBERS ({gMembers.length}) — visible in full to group members only</div>
+          {gMembers.length > 0 ? gMembers.map(m => <div key={m.id} className="text-xs text-gray-600 border-b last:border-0 py-1">{m.member_name || m.member_email}</div>)
+            : <div className="text-xs text-gray-400">No approved members recorded yet.</div>}
+        </div>
+
+        {/* Ratings & reviews */}
+        <div className="mt-4 border-t pt-3">
+          <div className="text-xs font-bold text-gray-500 mb-2">⭐ RATINGS & REVIEWS ({ratings.length}) — 1–5 stars, visible to everyone</div>
+          <div className="max-h-40 overflow-y-auto space-y-2">
             {ratings.length > 0 ? ratings.map(r => (
-              <div key={r.id} className="border rounded-xl p-3 mb-2 text-xs">
+              <div key={r.id} className="border rounded-xl p-2.5 text-xs">
                 <div className="flex justify-between"><span className="font-medium">{r.reviewer_name || r.reviewer_email}</span><Stars n={r.rating || 0} /></div>
-                {r.review && <p className="text-gray-600 mt-1">{r.review}</p>}
-                <div className="text-[10px] text-gray-400 mt-1">{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</div>
+                {r.review && <p className="text-gray-600 mt-0.5">{r.review}</p>}
+                <div className="text-[10px] text-gray-400 mt-0.5">{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</div>
               </div>
-            )) : <div className="text-xs text-gray-400 border border-dashed rounded-xl p-6 text-center">No reviews yet for this group.</div>}
+            )) : <div className="text-xs text-gray-400 border border-dashed rounded-xl p-4 text-center">No reviews yet for this group.</div>}
+          </div>
+        </div>
+
+        {/* Badge tiers — owner only */}
+        {!isPending && (
+          <div className="mt-4 border-t pt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-gray-500">Verification badge (you review first):</span>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'bronze')} className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥉 Bronze — Tier 1</button>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'silver')} className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥈 Silver — Tier 2</button>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'gold')} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥇 Gold — Tier 3</button>
           </div>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-2 border-t pt-4">
-          <span className="text-xs text-gray-500 self-center">Set badge:</span>
-          <button disabled={busy} onClick={() => verifyGroupBadge(g, 'bronze')} className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Bronze (Tier 1)</button>
-          <button disabled={busy} onClick={() => verifyGroupBadge(g, 'silver')} className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Silver (Tier 2)</button>
-          <button disabled={busy} onClick={() => verifyGroupBadge(g, 'gold')} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">Gold (Tier 3)</button>
+        {/* Actions */}
+        <div className="mt-5 border-t pt-4 flex flex-wrap gap-2">
+          {isPending && (
+            <>
+              <button disabled={busy} onClick={() => approveGroup(g)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve Group → Go Live</button>
+              <button disabled={busy} onClick={() => declineGroup(g)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline Group</button>
+            </>
+          )}
+          {request && request.status === 'pending' && (
+            <>
+              <button disabled={busy} onClick={() => reviewVerification(request, true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Verify This Group</button>
+              <button disabled={busy} onClick={() => reviewVerification(request, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline Request</button>
+            </>
+          )}
         </div>
+      </div>
+    );
+  }
+
+  /* ---------- PROFILE MODAL: USER ---------- */
+  function renderUserProfile(u, request) {
+    const adminGs = userAdminGroups(u);
+    const memberGs = userMemberGroups(u);
+    const refs = referredUsers(u);
+    const revs = userReviews(u);
+    const approved = isUserApproved(u);
+    const declined = isUserDeclined(u);
+    return (
+      <div>
+        <div className="flex justify-between items-start gap-3">
+          <div>
+            <h3 className="font-bold text-lg">{u.name || '—'} {u.is_verified && <BlueBadge />}</h3>
+            <div className="text-[11px] text-purple-700 font-mono font-bold">Unique ID: {refId(u)}</div>
+          </div>
+          <button onClick={() => setProfileView(null)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
+          <span className={`px-2 py-0.5 rounded-full ${approved ? 'bg-green-100 text-green-700' : declined ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{approved ? 'approved user' : declined ? 'declined' : 'pending approval'}</span>
+          {u.is_verified && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">🔵 blue verified</span>}
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-5 mt-4">
+          <div>
+            <div className="text-xs font-bold text-gray-500 mb-1">ACCOUNT DETAILS</div>
+            {infoRow('Name', u.name)}
+            {infoRow('Email', u.email)}
+            {infoRow('Phone', u.phone || '—')}
+            {infoRow('Role', u.role || 'member')}
+            {infoRow('Joined', u.created_at ? new Date(u.created_at).toLocaleString() : '—')}
+            {u.decline_reason && infoRow('Decline reason', u.decline_reason)}
+            {u.referred_by && infoRow('Referred by', u.referred_by)}
+          </div>
+          <div>
+            <div className="text-xs font-bold text-gray-500 mb-1">REFERRAL</div>
+            {infoRow('Referral link', <span className="text-[10px] break-all">https://{USER_REF}{refId(u)}</span>)}
+            {infoRow('Users referred', refs.length)}
+            {infoRow('Earnings', `₦${(refs.length * 200).toLocaleString()} ${(u.referral_earnings || 0) > 0 ? `(+₦${Number(u.referral_earnings).toLocaleString()} credited)` : ''}`)}
+            <button onClick={() => { navigator.clipboard?.writeText(`https://${USER_REF}${refId(u)}`); setMsg('Referral link copied.'); }} className="mt-1 text-[11px] border rounded-full px-3 py-1 hover:bg-gray-50">Copy referral link</button>
+          </div>
+        </div>
+
+        <div className="mt-4 border-t pt-3 grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="text-xs font-bold text-gray-500 mb-1">ADMIN OF ({adminGs.length})</div>
+            {adminGs.length > 0 ? adminGs.map(g => <div key={g.id} className="text-xs text-gray-600 py-1 border-b last:border-0">{g.name} <span className="text-gray-400">({g.status})</span></div>) : <div className="text-xs text-gray-400">Not an admin of any group.</div>}
+          </div>
+          <div>
+            <div className="text-xs font-bold text-gray-500 mb-1">MEMBER OF ({memberGs.length})</div>
+            {memberGs.length > 0 ? memberGs.map(m => { const g = groups.find(x => x.id === m.group_id); return <div key={m.id} className="text-xs text-gray-600 py-1 border-b last:border-0">{g?.name || m.group_id}</div>; }) : <div className="text-xs text-gray-400">Not a member of any group yet.</div>}
+          </div>
+        </div>
+
+        <div className="mt-4 border-t pt-3">
+          <div className="text-xs font-bold text-gray-500 mb-1">REVIEWS FROM GROUP ADMINS ({revs.length})</div>
+          <div className="max-h-36 overflow-y-auto space-y-1.5">
+            {revs.length > 0 ? revs.map(r => (
+              <div key={r.id} className="text-xs text-gray-600 border rounded-lg p-2">
+                <span className="text-yellow-500">{'★'.repeat(r.rating || 0)}{'☆'.repeat(Math.max(0, 5 - (r.rating || 0)))}</span> {r.review} <span className="text-gray-400">— {r.admin_email} • {r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</span>
+              </div>
+            )) : <div className="text-xs text-gray-400 border border-dashed rounded-xl p-4 text-center">No reviews yet from group admins.</div>}
+          </div>
+        </div>
+
+        <div className="mt-5 border-t pt-4 flex flex-wrap gap-2">
+          {!approved && (
+            <button disabled={busy} onClick={() => approveUser(u)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve User</button>
+          )}
+          {!declined && (
+            <button disabled={busy} onClick={() => declineUser(u)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline User</button>
+          )}
+          {request && request.status === 'pending' && (
+            <button disabled={busy} onClick={() => reviewVerification(request, true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Verify → 🔵 Blue Badge</button>
+          )}
+        </div>
+        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge is only granted by verifying from the Verification tab.</div>
       </div>
     );
   }
