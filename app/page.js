@@ -1223,7 +1223,7 @@ export default function OwnerPanel() {
 
         {/* KYC document comparison — profile photo vs submitted ID photos (click to expand) */}
         <div className="mt-4 border rounded-xl p-3">
-          <div className="text-xs font-bold text-gray-500 mb-2">🪪 IDENTITY CHECK — compare the profile photo with the ID photos they uploaded at signup</div>
+          <div className="text-xs font-bold text-gray-500 mb-2">🪪 IDENTITY CHECK — compare the profile photo with any ID photos on file (signup needs only a selfie; group creators submit ID with their group)</div>
           <div className="flex flex-wrap items-start gap-4">
             <div className="text-center">
               {u.profile_pic
