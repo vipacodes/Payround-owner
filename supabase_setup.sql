@@ -472,3 +472,9 @@ CREATE POLICY group_messages_select ON group_messages FOR SELECT USING (true);
 CREATE POLICY group_messages_insert ON group_messages FOR INSERT WITH CHECK (true);
 CREATE POLICY group_messages_delete ON group_messages FOR DELETE USING (true);
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v2.7: Each group can publish its own rules — shown to every user BEFORE joining
+-- =============================================
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS rules text;
+NOTIFY pgrst, 'reload schema';
