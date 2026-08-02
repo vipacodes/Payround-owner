@@ -450,3 +450,25 @@ CREATE POLICY messages_insert ON messages FOR INSERT WITH CHECK (true);
 CREATE POLICY messages_update ON messages FOR UPDATE USING (true);
 CREATE POLICY messages_delete ON messages FOR DELETE USING (true);
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v2.6: Group chat rooms — every group gets its own members-only conversation
+--       (group_messages: inbox rows per group; read/insert/delete are public,
+--        the app itself restricts room access to that group's admin & approved members)
+-- =============================================
+CREATE TABLE IF NOT EXISTS group_messages (
+  id text PRIMARY KEY,
+  group_id text NOT NULL,
+  from_email text NOT NULL,
+  body text NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages (group_id, created_at);
+ALTER TABLE group_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS group_messages_select ON group_messages;
+DROP POLICY IF EXISTS group_messages_insert ON group_messages;
+DROP POLICY IF EXISTS group_messages_delete ON group_messages;
+CREATE POLICY group_messages_select ON group_messages FOR SELECT USING (true);
+CREATE POLICY group_messages_insert ON group_messages FOR INSERT WITH CHECK (true);
+CREATE POLICY group_messages_delete ON group_messages FOR DELETE USING (true);
+NOTIFY pgrst, 'reload schema';

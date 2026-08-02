@@ -336,12 +336,26 @@ export default function OwnerPanel() {
   const verifyGroupBadge = async (g, tier) => {
     setBusy(true);
     try {
-      const { error } = await supabase.from('groups').update({ badge_tier: tier, is_verified: true }).eq('id', g.id);
+      const { error } = await supabase.from('groups').update({ badge_tier: tier }).eq('id', g.id);
       if (error) throw error;
-      setMsg(`Badge for "${g.name}" updated to ${tier} ${badgeEmoji(tier)}.`);
-      setProfileView({ ...profileView, data: { ...profileView.data, badge_tier: tier, is_verified: true } });
+      setMsg(`Tier badge for "${g.name}" updated to ${tier} ${badgeEmoji(tier)} — it shows as a ${tier} check mark on the user site.`);
+      setProfileView({ ...profileView, data: { ...profileView.data, badge_tier: tier } });
       loadData();
     } catch (e) { setErr(`Badge update failed: ${e.message}`); }
+    setBusy(false);
+  };
+
+  /* Blue check on a GROUP — only you can give/remove it (tier badges do NOT grant it) */
+  const verifyGroupCheck = async (g, verify) => {
+    if (!window.confirm(`${verify ? 'Add the 🔵 Blue Check to' : 'Remove the 🔵 Blue Check from'} "${g.name}"?`)) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('groups').update({ is_verified: verify }).eq('id', g.id);
+      if (error) throw error;
+      setMsg(verify ? `🔵 Blue Check added to "${g.name}".` : `🔵 Blue Check removed from "${g.name}".`);
+      setProfileView({ ...profileView, data: { ...profileView.data, is_verified: verify } });
+      loadData();
+    } catch (e) { setErr(`Blue check failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -1247,10 +1261,22 @@ export default function OwnerPanel() {
           </div>
         </div>
 
-        {/* Badge tiers — owner only */}
+        {/* Blue check — owner only (separate from tier badges, nothing is automatic) */}
         {!isPending && (
           <div className="mt-4 border-t pt-3 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-gray-500">Verification badge (you review first):</span>
+            <span className="text-xs text-gray-500">🔵 Blue Check (only you can give this):</span>
+            {!g.is_verified ? (
+              <button disabled={busy} onClick={() => verifyGroupCheck(g, true)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🔵 Add Blue Check</button>
+            ) : (
+              <button disabled={busy} onClick={() => verifyGroupCheck(g, false)} className="bg-white text-blue-700 border border-blue-200 hover:bg-blue-50 px-3 py-1 rounded-full text-xs disabled:opacity-60">✖ Remove Blue Check</button>
+            )}
+          </div>
+        )}
+
+        {/* Badge tiers — owner only (each tier shows as a colored check mark) */}
+        {!isPending && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-gray-500">Tier badge (shows as a colored check mark):</span>
             <button disabled={busy} onClick={() => verifyGroupBadge(g, 'bronze')} className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥉 Bronze — Tier 1</button>
             <button disabled={busy} onClick={() => verifyGroupBadge(g, 'silver')} className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥈 Silver — Tier 2</button>
             <button disabled={busy} onClick={() => verifyGroupBadge(g, 'gold')} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥇 Gold — Tier 3</button>
