@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK } from '@/lib/supabase';
 
 // Tap-to-load: shows a user's profile selfie for ID comparison in the Verification tab
-function CompareSelfie({ email }) {
+function CompareSelfie({ email, onZoom }) {
   const [pic, setPic] = useState(undefined);
   const load = async () => {
     setPic(null);
@@ -13,10 +13,10 @@ function CompareSelfie({ email }) {
     } catch { setPic(''); }
   };
   if (pic) return (
-    <a href={pic} target="_blank" rel="noreferrer" className="block text-center">
+    <button onClick={() => onZoom && onZoom(pic)} className="block text-center" title="Tap to expand">
       <img src={pic} alt="profile selfie" className="w-24 h-24 object-cover rounded-lg border-2 border-blue-400 hover:opacity-80" />
       <span className="block text-[10px] font-bold text-blue-700 mt-0.5">PROFILE SELFIE</span>
-    </a>
+    </button>
   );
   if (pic === '') return <span className="text-[11px] text-gray-400">No selfie on file</span>;
   return (
@@ -819,7 +819,7 @@ export default function OwnerPanel() {
                       {r.images && (
                         <div className="flex flex-wrap gap-2 mt-2">
                           {String(r.images).split(',').filter(Boolean).map((img, i) => (
-                            <a key={i} href={img.trim()} target="_blank" rel="noreferrer"><img src={img.trim()} alt={`evidence ${i + 1}`} className="w-16 h-16 object-cover rounded-lg border hover:opacity-80" /></a>
+                            <img key={i} src={img.trim()} alt={`evidence ${i + 1}`} onClick={() => setZoomImg(img.trim())} title="Tap to expand" className="w-16 h-16 object-cover rounded-lg border hover:opacity-80 cursor-zoom-in" />
                           ))}
                         </div>
                       )}
@@ -846,18 +846,18 @@ export default function OwnerPanel() {
                         <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
                           <p className="text-xs font-semibold text-blue-800 mb-2">🪪 ID check — compare the ID photo with the profile selfie. Grant the 🔵 badge only if the faces match.</p>
                           <div className="flex flex-wrap items-start gap-3">
-                            <CompareSelfie email={r.user_email} />
+                            <CompareSelfie email={r.user_email} onZoom={setZoomImg} />
                             {r.id_front_url && (
-                              <a href={r.id_front_url} target="_blank" rel="noreferrer" className="block text-center">
+                              <button onClick={() => setZoomImg(r.id_front_url)} className="block text-center" title="Tap to expand">
                                 <img src={r.id_front_url} alt="ID front" className="w-32 h-24 object-contain rounded-lg border-2 border-blue-400 bg-white hover:opacity-80" />
                                 <span className="block text-[10px] font-bold text-blue-700 mt-0.5">ID FRONT</span>
-                              </a>
+                              </button>
                             )}
                             {r.id_back_url && (
-                              <a href={r.id_back_url} target="_blank" rel="noreferrer" className="block text-center">
+                              <button onClick={() => setZoomImg(r.id_back_url)} className="block text-center" title="Tap to expand">
                                 <img src={r.id_back_url} alt="ID back" className="w-32 h-24 object-contain rounded-lg border-2 border-blue-400 bg-white hover:opacity-80" />
                                 <span className="block text-[10px] font-bold text-blue-700 mt-0.5">ID BACK</span>
-                              </a>
+                              </button>
                             )}
                           </div>
                         </div>
@@ -865,7 +865,7 @@ export default function OwnerPanel() {
                       {r.images && (
                         <div className="flex flex-wrap gap-2 mt-2">
                           {String(r.images).split(',').filter(Boolean).map((img, i) => (
-                            <a key={i} href={img.trim()} target="_blank" rel="noreferrer"><img src={img.trim()} alt={`evidence ${i + 1}`} className="w-16 h-16 object-cover rounded-lg border hover:opacity-80" /></a>
+                            <img key={i} src={img.trim()} alt={`evidence ${i + 1}`} onClick={() => setZoomImg(img.trim())} title="Tap to expand" className="w-16 h-16 object-cover rounded-lg border hover:opacity-80 cursor-zoom-in" />
                           ))}
                         </div>
                       )}
@@ -1213,13 +1213,13 @@ export default function OwnerPanel() {
             <div className="text-xs font-bold text-gray-500 mb-1">KYC & PAYMENT EVIDENCE</div>
             <div className="flex flex-wrap gap-2">
               {g.selfie_url
-                ? <a href={g.selfie_url} target="_blank" rel="noreferrer"><img src={g.selfie_url} alt="selfie" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                ? <img src={g.selfie_url} alt="selfie" onClick={() => setZoomImg(g.selfie_url)} title="Tap to expand" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80 cursor-zoom-in" />
                 : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No selfie</span>}
               {g.id_url
-                ? <a href={g.id_url} target="_blank" rel="noreferrer"><img src={g.id_url} alt={`ID (${g.id_type || 'ID'})`} className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                ? <img src={g.id_url} alt={`ID (${g.id_type || 'ID'})`} onClick={() => setZoomImg(g.id_url)} title="Tap to expand" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80 cursor-zoom-in" />
                 : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No ID</span>}
               {g.creation_receipt_url
-                ? <a href={g.creation_receipt_url} target="_blank" rel="noreferrer"><img src={g.creation_receipt_url} alt="₦5,000 receipt" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80" /></a>
+                ? <img src={g.creation_receipt_url} alt="creation receipt" onClick={() => setZoomImg(g.creation_receipt_url)} title="Tap to expand" className="w-16 h-16 rounded-lg border object-cover hover:opacity-80 cursor-zoom-in" />
                 : <span className="text-[10px] text-gray-400 border border-dashed rounded-lg px-2 py-3">No receipt</span>}
             </div>
             <div className="text-[10px] text-gray-400 mt-1">Selfie • {g.id_type || 'ID'} • ₦5,000 payment receipt (click to enlarge)</div>
