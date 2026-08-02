@@ -494,3 +494,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name text;
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v3.0: Spot wishlist on join requests — a joiner can ask for preferred spot numbers;
+--       if admin can't grant them, admin sends an alternative offer (offered_spots)
+--       which the user must ACCEPT or DECLINE before becoming a member
+-- =============================================
+ALTER TABLE members ADD COLUMN IF NOT EXISTS desired_spots text;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS offered_spots text;
+NOTIFY pgrst, 'reload schema';
