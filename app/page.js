@@ -66,6 +66,8 @@ export default function OwnerPanel() {
   const [photoPendingUsers, setPhotoPendingUsers] = useState([]); // full rows of users awaiting photo approval
   const [zoomImg, setZoomImg] = useState(null); // click-to-expand profile photo lightbox
   const [loadIssue, setLoadIssue] = useState(''); // visible if a data load ever fails (never silent)
+  const [userSearch, setUserSearch] = useState('');
+  const [groupSearch, setGroupSearch] = useState('');
   const [receiptView, setReceiptView] = useState(null);
 
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
@@ -253,6 +255,26 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
+  /* ---------- VERIFY / UNVERIFY USER (blue badge) straight from their profile ---------- */
+  const verifyUserBadge = async (u, verify) => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { error } = await supabase.from('users').update({ is_verified: verify }).eq('id', u.id);
+      if (error) throw error;
+      await notify(
+        verify ? 'verification_approved' : 'verification_declined', null,
+        verify
+          ? '🎉 Your account has been verified — the 🔵 blue badge is now on your profile.'
+          : 'Your blue verification badge was removed after a review. You can contact support if this seems wrong.',
+        u.email
+      );
+      setMsg(verify ? `🔵 ${u.name || u.email} is now verified — blue badge granted.` : `Blue badge removed from ${u.name || u.email}.`);
+      setProfileView({ ...profileView, data: { ...u, is_verified: verify } });
+      loadData();
+    } catch (e) { setErr(`Verify failed: ${e.message}`); }
+    setBusy(false);
+  };
+
   /* ---------- VERIFICATION requests (groups & users) ---------- */
   const reviewVerification = async (req, verify) => {
     setBusy(true);
@@ -412,6 +434,22 @@ export default function OwnerPanel() {
   const isUserDeclined = (u) => u.approval_status === 'declined';
   const activeUsers = usersList.filter(isUserApproved);
   const pendingUsers = usersList.filter(u => !isUserApproved(u));
+  // Owner search helpers — users by name/email/ID, groups by name/ID/admin
+  const matchUser = (u) => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (u.name || '').toLowerCase().includes(q)
+      || (u.email || '').toLowerCase().includes(q)
+      || String(u.id || '').toLowerCase().startsWith(q);
+  };
+  const matchGroup = (g) => {
+    const q = groupSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (g.name || '').toLowerCase().includes(q)
+      || String(g.id || '').toLowerCase() === q
+      || (g.admin_name || '').toLowerCase().includes(q)
+      || (g.admin_email || '').toLowerCase().includes(q);
+  };
   const verifiedUsers = usersList.filter(u => u.is_verified);
   const groupRequests = verifyRequests.filter(r => (r.subject_type || 'group') === 'group' && r.status === 'pending');
   const userRequests = verifyRequests.filter(r => r.subject_type === 'user' && r.status === 'pending');
@@ -601,11 +639,19 @@ export default function OwnerPanel() {
             <div className="space-y-4">
               {subPills([{ id: 'active', label: '✅ Active Groups', count: activeGroups.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingGroups.length }], groupsSub, setGroupsSub)}
 
+              {/* Search groups (name, ID, or admin) */}
+              <input
+                value={groupSearch}
+                onChange={e => setGroupSearch(e.target.value)}
+                placeholder="🔎 Search groups by name, ID, or admin…"
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              />
+
               {groupsSub === 'active' && (
                 <div className="bg-white rounded-xl border p-5">
                   <h3 className="font-bold mb-1">Active Groups</h3>
                   <p className="text-xs text-gray-500 mb-3">Approved and visible on the user site. Click one to see its full profile, admin, members, rating and reviews.</p>
-                  {activeGroups.map(g => (
+                  {activeGroups.filter(matchGroup).map(g => (
                     <div key={g.id} className="border-b last:border-0 py-3 text-sm flex justify-between items-center gap-3">
                       <div className="min-w-0">
                         <div className="font-medium">{g.name} {g.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">• ID: {g.id}</span></div>
@@ -614,7 +660,7 @@ export default function OwnerPanel() {
                       <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
                     </div>
                   ))}
-                  {activeGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No active groups yet.</div>}
+                  {activeGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">{groupSearch ? `No groups match "${groupSearch}".` : 'No active groups yet.'}</div>}
                 </div>
               )}
 
@@ -622,7 +668,7 @@ export default function OwnerPanel() {
                 <div className="bg-white rounded-xl border p-5">
                   <h3 className="font-bold mb-1">Pending Groups</h3>
                   <p className="text-xs text-gray-500 mb-3">View the full profile (KYC, details) before deciding. Approved groups go live immediately.</p>
-                  {pendingGroups.map(g => (
+                  {pendingGroups.filter(matchGroup).map(g => (
                     <div key={g.id} className="border rounded-xl p-3 mb-3">
                       <div className="font-medium text-sm">{g.name} <span className="text-xs text-gray-500">• {g.admin_email}</span></div>
                       <div className="text-xs text-gray-500 mt-1">₦{Number(g.amount).toLocaleString()} {g.frequency} • {g.max_members} members • Color: <span className="inline-block w-3 h-3 rounded-full align-middle" style={{ background: g.color }} /></div>
@@ -635,7 +681,7 @@ export default function OwnerPanel() {
                       </div>
                     </div>
                   ))}
-                  {pendingGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No groups waiting for review.</div>}
+                  {pendingGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">{groupSearch ? `No groups match "${groupSearch}".` : 'No groups waiting for review.'}</div>}
                 </div>
               )}
             </div>
@@ -652,6 +698,14 @@ export default function OwnerPanel() {
                 <button onClick={loadData} className="shrink-0 text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">🔁 Refresh</button>
               </div>
 
+              {/* Search users (name, email, or unique ID) */}
+              <input
+                value={userSearch}
+                onChange={e => setUserSearch(e.target.value)}
+                placeholder="🔎 Search users by name, email, or ID…"
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              />
+
               {/* Profile photo change requests banner */}
               {usersList.filter(u => u.pending_profile_pic).length > 0 && (
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between gap-3">
@@ -664,16 +718,16 @@ export default function OwnerPanel() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 {usersSub === 'active' ? (
-                  activeUsers.length > 0 ? activeUsers.map(u => (
+                  activeUsers.filter(matchUser).length > 0 ? activeUsers.filter(matchUser).map(u => (
                     <div key={u.id} className="border rounded-xl p-4">
                       <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
                       <button onClick={() => openUserProfile(u)} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
                     </div>
-                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No approved users yet — approve users from the pending list.</div>
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No users match "${userSearch}".` : 'No approved users yet — approve users from the pending list.'}</div>
                 ) : (
-                  pendingUsers.length > 0 ? pendingUsers.map(u => (
+                  pendingUsers.filter(matchUser).length > 0 ? pendingUsers.filter(matchUser).map(u => (
                     <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
                       <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
@@ -685,7 +739,7 @@ export default function OwnerPanel() {
                         {!isUserDeclined(u) && <button disabled={busy} onClick={() => declineUser(u)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>}
                       </div>
                     </div>
-                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">No users waiting for approval.</div>
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No users match "${userSearch}".` : 'No users waiting for approval.'}</div>
                 )}
               </div>
 
@@ -1167,6 +1221,31 @@ export default function OwnerPanel() {
           </div>
         )}
 
+        {/* KYC document comparison — profile photo vs submitted ID photos (click to expand) */}
+        <div className="mt-4 border rounded-xl p-3">
+          <div className="text-xs font-bold text-gray-500 mb-2">🪪 IDENTITY CHECK — compare the profile photo with the ID photos they uploaded at signup</div>
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="text-center">
+              {u.profile_pic
+                ? <img src={u.profile_pic} alt="profile" onClick={() => setZoomImg(u.profile_pic)} title="Click to expand" className="w-16 h-16 rounded-xl object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
+                : <div className="w-16 h-16 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xl shadow-sm">{(u.name || u.email || 'U')[0].toUpperCase()}</div>}
+              <div className="text-[10px] text-gray-500 mt-1">Profile photo</div>
+            </div>
+            <div className="text-center">
+              {u.id_front_url
+                ? <img src={u.id_front_url} alt="ID front" onClick={() => setZoomImg(u.id_front_url)} title="Click to expand" className="w-24 h-16 rounded-xl object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
+                : <div className="w-24 h-16 rounded-xl bg-gray-100 border border-dashed border-gray-300 flex items-center justify-center text-[10px] text-gray-400">No ID<br/>front</div>}
+              <div className="text-[10px] text-gray-500 mt-1">ID — front</div>
+            </div>
+            <div className="text-center">
+              {u.id_back_url
+                ? <img src={u.id_back_url} alt="ID back" onClick={() => setZoomImg(u.id_back_url)} title="Click to expand" className="w-24 h-16 rounded-xl object-cover border shadow-sm cursor-zoom-in hover:opacity-90" />
+                : <div className="w-24 h-16 rounded-xl bg-gray-100 border border-dashed border-gray-300 flex items-center justify-center text-[10px] text-gray-400">No ID<br/>back</div>}
+              <div className="text-[10px] text-gray-500 mt-1">ID — back</div>
+            </div>
+          </div>
+        </div>
+
         <div className="grid md:grid-cols-2 gap-5 mt-4">
           <div>
             <div className="text-xs font-bold text-gray-500 mb-1">ACCOUNT DETAILS</div>
@@ -1219,8 +1298,15 @@ export default function OwnerPanel() {
           {request && request.status === 'pending' && (
             <button disabled={busy} onClick={() => reviewVerification(request, true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Verify → 🔵 Blue Badge</button>
           )}
+          {/* Quick verify / unverify — visible only to you (owner), works from ANY user profile */}
+          {approved && !u.is_verified && (
+            <button disabled={busy} onClick={() => verifyUserBadge(u, true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🔵 Verify User</button>
+          )}
+          {approved && u.is_verified && (
+            <button disabled={busy} onClick={() => verifyUserBadge(u, false)} className="bg-gray-100 text-gray-600 border border-gray-300 hover:bg-gray-200 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">Remove Blue Badge</button>
+          )}
         </div>
-        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge is only granted by verifying from the Verification tab.</div>
+        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons).</div>
       </div>
     );
   }

@@ -322,3 +322,11 @@ create policy "Public delete members" on members for delete using (true);
 -- ============================================================
 alter table groups add column if not exists badge_tier text;
 alter table members add column if not exists member_phone text;
+
+-- ============================================================
+-- v1.9 MIGRATION — signup ID photos for owner review (+ legacy
+-- broadcast notifications purge, already applied to the database)
+-- ============================================================
+alter table users add column if not exists id_front_url text;
+alter table users add column if not exists id_back_url text;
+delete from notifications where user_email is null and group_id is null;
