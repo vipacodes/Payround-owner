@@ -388,3 +388,10 @@ CREATE POLICY payouts_select ON payouts FOR SELECT USING (true);
 CREATE POLICY payouts_insert ON payouts FOR INSERT WITH CHECK (true);
 CREATE POLICY payouts_update ON payouts FOR UPDATE USING (true);
 CREATE POLICY payouts_delete ON payouts FOR DELETE USING (true);
+
+-- v2.1 editable profile fields (unlocked after PayRound approves the account)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gender text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dob text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS occupation text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio text;
