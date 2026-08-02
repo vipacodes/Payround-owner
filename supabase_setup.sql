@@ -427,3 +427,26 @@ NOTIFY pgrst, 'reload schema';
 ALTER TABLE verification_requests ADD COLUMN IF NOT EXISTS id_front_url text;
 ALTER TABLE verification_requests ADD COLUMN IF NOT EXISTS id_back_url text;
 NOTIFY pgrst, 'reload schema';
+
+
+-- =============================================
+-- v2.5: Direct messages between users (business owners, admins, everyone)
+-- =============================================
+CREATE TABLE IF NOT EXISTS messages (
+  id text PRIMARY KEY,
+  from_email text NOT NULL,
+  to_email text NOT NULL,
+  body text NOT NULL,
+  read boolean NOT NULL DEFAULT false,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS messages_select ON messages;
+DROP POLICY IF EXISTS messages_insert ON messages;
+DROP POLICY IF EXISTS messages_update ON messages;
+DROP POLICY IF EXISTS messages_delete ON messages;
+CREATE POLICY messages_select ON messages FOR SELECT USING (true);
+CREATE POLICY messages_insert ON messages FOR INSERT WITH CHECK (true);
+CREATE POLICY messages_update ON messages FOR UPDATE USING (true);
+CREATE POLICY messages_delete ON messages FOR DELETE USING (true);
+NOTIFY pgrst, 'reload schema';

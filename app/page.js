@@ -156,6 +156,8 @@ export default function OwnerPanel() {
     try {
       const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
       await supabase.from('notifications').delete().lt('created_at', cutoff);
+      // Also purge READ direct messages older than 60 days
+      await supabase.from('messages').delete().eq('read', true).lt('created_at', cutoff);
     } catch {}
     setMembers(await safe(supabase.from('members').select('*')));
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
