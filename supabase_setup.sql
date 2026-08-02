@@ -418,3 +418,12 @@ CREATE POLICY follows_delete ON follows FOR DELETE USING (true);
 ALTER TABLE ads ADD COLUMN IF NOT EXISTS media_urls text;
 ALTER TABLE ads ADD COLUMN IF NOT EXISTS whatsapp text;
 NOTIFY pgrst, 'reload schema';
+
+
+-- =============================================
+-- v2.4: Verified-badge applications store the applicant's valid ID
+--       so the owner can compare it with the user's profile selfie
+-- =============================================
+ALTER TABLE verification_requests ADD COLUMN IF NOT EXISTS id_front_url text;
+ALTER TABLE verification_requests ADD COLUMN IF NOT EXISTS id_back_url text;
+NOTIFY pgrst, 'reload schema';

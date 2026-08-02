@@ -2,6 +2,30 @@
 import { useState, useEffect } from 'react';
 import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK } from '@/lib/supabase';
 
+// Tap-to-load: shows a user's profile selfie for ID comparison in the Verification tab
+function CompareSelfie({ email }) {
+  const [pic, setPic] = useState(undefined);
+  const load = async () => {
+    setPic(null);
+    try {
+      const { data } = await supabase.from('users').select('profile_pic').eq('email', (email || '').toLowerCase()).single();
+      setPic(data?.profile_pic || '');
+    } catch { setPic(''); }
+  };
+  if (pic) return (
+    <a href={pic} target="_blank" rel="noreferrer" className="block text-center">
+      <img src={pic} alt="profile selfie" className="w-24 h-24 object-cover rounded-lg border-2 border-blue-400 hover:opacity-80" />
+      <span className="block text-[10px] font-bold text-blue-700 mt-0.5">PROFILE SELFIE</span>
+    </a>
+  );
+  if (pic === '') return <span className="text-[11px] text-gray-400">No selfie on file</span>;
+  return (
+    <button onClick={load} className="text-xs bg-blue-600 text-white rounded-full px-3 py-1.5 hover:bg-blue-700">
+      {pic === null ? 'Loading…' : '👤 Show profile selfie'}
+    </button>
+  );
+}
+
 async function sha256Hex(text) {
   const data = new TextEncoder().encode(text);
   const buf = await crypto.subtle.digest('SHA-256', data);
@@ -816,6 +840,26 @@ export default function OwnerPanel() {
                       <div className="font-medium text-sm">{r.user_name || u?.name || r.user_email} <span className="text-xs text-gray-500">• {r.user_email}</span></div>
                       <div className="text-xs text-gray-500 mt-1">Submitted {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</div>
                       {r.reason && <p className="text-sm mt-2 bg-gray-50 rounded-lg p-3">{r.reason}</p>}
+                      {(r.id_front_url || r.id_back_url) ? (
+                        <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                          <p className="text-xs font-semibold text-blue-800 mb-2">🪪 ID check — compare the ID photo with the profile selfie. Grant the 🔵 badge only if the faces match.</p>
+                          <div className="flex flex-wrap items-start gap-3">
+                            <CompareSelfie email={r.user_email} />
+                            {r.id_front_url && (
+                              <a href={r.id_front_url} target="_blank" rel="noreferrer" className="block text-center">
+                                <img src={r.id_front_url} alt="ID front" className="w-32 h-24 object-contain rounded-lg border-2 border-blue-400 bg-white hover:opacity-80" />
+                                <span className="block text-[10px] font-bold text-blue-700 mt-0.5">ID FRONT</span>
+                              </a>
+                            )}
+                            {r.id_back_url && (
+                              <a href={r.id_back_url} target="_blank" rel="noreferrer" className="block text-center">
+                                <img src={r.id_back_url} alt="ID back" className="w-32 h-24 object-contain rounded-lg border-2 border-blue-400 bg-white hover:opacity-80" />
+                                <span className="block text-[10px] font-bold text-blue-700 mt-0.5">ID BACK</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
                       {r.images && (
                         <div className="flex flex-wrap gap-2 mt-2">
                           {String(r.images).split(',').filter(Boolean).map((img, i) => (
