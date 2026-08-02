@@ -485,3 +485,12 @@ NOTIFY pgrst, 'reload schema';
 -- =============================================
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS chat_open boolean NOT NULL DEFAULT false;
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v2.9: User bank account details (editable in Settings, shown on profiles;
+--       a group admin's bank is pinned at the top of their group page)
+-- =============================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name text;
+NOTIFY pgrst, 'reload schema';
