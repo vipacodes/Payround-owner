@@ -478,3 +478,10 @@ NOTIFY pgrst, 'reload schema';
 -- =============================================
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS rules text;
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v2.8: Group chat admin-lock — when chat_open is FALSE only the group admin can
+--       type; the admin opens it for members whenever they want (default: locked)
+-- =============================================
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS chat_open boolean NOT NULL DEFAULT false;
+NOTIFY pgrst, 'reload schema';
