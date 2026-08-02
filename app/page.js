@@ -941,7 +941,12 @@ export default function OwnerPanel() {
                         <div className="min-w-0">
                           <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span></div>
                           <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{a.description || '—'}</div>
-                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact, a.website, a.submitter_email, a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : ''].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email, a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : ''].filter(Boolean).join(' • ')}</div>
+                          {(() => { try { const m = JSON.parse(a.media_urls || '[]'); return Array.isArray(m) && m.length > 0 ? (
+                            <div className="flex gap-1.5 mt-2 flex-wrap">{m.slice(0, 6).map((src, i) => String(src).startsWith('data:video')
+                              ? <video key={i} src={src} muted playsInline className="w-14 h-14 rounded-lg object-cover border bg-black" />
+                              : <img key={i} src={src} alt="" className="w-14 h-14 rounded-lg object-cover border" />)}<span className="text-[10px] text-gray-400 self-center">{m.length} item{m.length > 1 ? 's' : ''} (slideshow)</span></div>
+                          ) : null; } catch { return null; } })()}
                         </div>
                         <div className="flex gap-2 shrink-0">
                           <button disabled={busy} onClick={() => reviewAd(a, true)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Go Live</button>

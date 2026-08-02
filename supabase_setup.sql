@@ -413,3 +413,8 @@ DROP POLICY IF EXISTS follows_delete ON follows;
 CREATE POLICY follows_select ON follows FOR SELECT USING (true);
 CREATE POLICY follows_insert ON follows FOR INSERT WITH CHECK (true);
 CREATE POLICY follows_delete ON follows FOR DELETE USING (true);
+
+-- v2.3 ad media slideshow + whatsapp business contact
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS media_urls text;
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS whatsapp text;
+NOTIFY pgrst, 'reload schema';
