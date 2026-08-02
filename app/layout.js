@@ -1,5 +1,6 @@
 import './globals.css';
 import PwaRegister from './PwaRegister';
+import BootLoader from './BootLoader';
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -23,7 +24,7 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
-      <body><PwaRegister />{children}</body>
+      <body><BootLoader /><PwaRegister />{children}</body>
     </html>
   );
 }
