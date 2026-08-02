@@ -330,3 +330,61 @@ alter table members add column if not exists member_phone text;
 alter table users add column if not exists id_front_url text;
 alter table users add column if not exists id_back_url text;
 delete from notifications where user_email is null and group_id is null;
+-- =====================================================================
+-- v2.0 — Group rotation spots, contribution payments & payout board
+-- A member can hold multiple spots. Receipts are uploaded per spot and
+-- per number of weeks (upfront). Group admin approves (marks member paid)
+-- or declines (with optional reason, member notified). Collected payouts
+-- are marked per spot and visible to everyone in the group.
+-- =====================================================================
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS spots text DEFAULT '';
+ALTER TABLE members ADD COLUMN IF NOT EXISTS spots_requested integer DEFAULT 1;
+
+-- Receipt uploads for weekly/period contributions
+CREATE TABLE IF NOT EXISTS payments (
+  id text PRIMARY KEY,
+  group_id text NOT NULL,
+  member_id text,
+  user_email text NOT NULL,
+  member_name text,
+  spots text DEFAULT '',            -- comma-separated spot numbers paid for, e.g. '1,19'
+  weeks integer DEFAULT 1,         -- how many weeks/periods this payment covers
+  amount numeric DEFAULT 0,
+  receipt_url text,                -- compressed image data URL
+  status text DEFAULT 'pending',   -- pending | approved | declined
+  decline_reason text,
+  created_at timestamptz DEFAULT now(),
+  reviewed_at timestamptz
+);
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS payments_select ON payments;
+DROP POLICY IF EXISTS payments_insert ON payments;
+DROP POLICY IF EXISTS payments_update ON payments;
+DROP POLICY IF EXISTS payments_delete ON payments;
+CREATE POLICY payments_select ON payments FOR SELECT USING (true);
+CREATE POLICY payments_insert ON payments FOR INSERT WITH CHECK (true);
+CREATE POLICY payments_update ON payments FOR UPDATE USING (true);
+CREATE POLICY payments_delete ON payments FOR DELETE USING (true);
+
+-- Payout board — one row per collected payout (marked by group admin)
+CREATE TABLE IF NOT EXISTS payouts (
+  id text PRIMARY KEY,
+  group_id text NOT NULL,
+  spot integer NOT NULL,
+  user_email text,
+  member_name text,
+  amount numeric DEFAULT 0,
+  week integer,
+  status text DEFAULT 'collected',
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS payouts_select ON payouts;
+DROP POLICY IF EXISTS payouts_insert ON payouts;
+DROP POLICY IF EXISTS payouts_update ON payouts;
+DROP POLICY IF EXISTS payouts_delete ON payouts;
+CREATE POLICY payouts_select ON payouts FOR SELECT USING (true);
+CREATE POLICY payouts_insert ON payouts FOR INSERT WITH CHECK (true);
+CREATE POLICY payouts_update ON payouts FOR UPDATE USING (true);
+CREATE POLICY payouts_delete ON payouts FOR DELETE USING (true);
