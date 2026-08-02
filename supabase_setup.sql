@@ -395,3 +395,21 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dob text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS address text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS occupation text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS bio text;
+
+-- v2.2 follow system + ad contact column (+ schema reload note: run NOTIFY pgrst, 'reload schema'; after)
+ALTER TABLE ads ADD COLUMN IF NOT EXISTS contact text;
+
+CREATE TABLE IF NOT EXISTS follows (
+  id text PRIMARY KEY,
+  follower_email text NOT NULL,
+  following_id text,
+  following_email text NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS follows_select ON follows;
+DROP POLICY IF EXISTS follows_insert ON follows;
+DROP POLICY IF EXISTS follows_delete ON follows;
+CREATE POLICY follows_select ON follows FOR SELECT USING (true);
+CREATE POLICY follows_insert ON follows FOR INSERT WITH CHECK (true);
+CREATE POLICY follows_delete ON follows FOR DELETE USING (true);

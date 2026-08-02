@@ -374,6 +374,24 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
+  // Approve/decline submitted ads — approved ones go live on the home page + every user dashboard
+  const reviewAd = async (ad, approve) => {
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('ads').update({ status: approve ? 'approved' : 'declined' }).eq('id', ad.id);
+      if (error) throw error;
+      try {
+        await notify('ad_review', null, approve
+          ? `📢 Your ad "${ad.business_name || 'Business'}" is now LIVE on PayRound — shown to visitors and on every user dashboard. 🎉`
+          : `Your ad "${ad.business_name || 'Business'}" was not approved this time. You can submit an improved ad anytime.`,
+          (ad.submitter_email || '').toLowerCase() || null);
+      } catch {}
+      setMsg(approve ? `Ad "${ad.business_name}" approved — now visible on the user site.` : `Ad "${ad.business_name}" declined — the submitter has been notified.`);
+      loadData();
+    } catch (e) { setErr(`Ad review failed: ${e.message}`); }
+    setBusy(false);
+  };
+
   const clearAnnouncement = async () => {
     setBusy(true); setErr('');
     try {
@@ -906,6 +924,45 @@ export default function OwnerPanel() {
                   <div className="font-bold">₦{Number(t.amount || 0).toLocaleString()}</div>
                 </button>
               )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No transactions yet. Payments to {bankDetails.bankName} {bankDetails.accountNumber} will show here automatically.</div>}
+            </div>
+          )}
+
+          {activeMenu === 'transactions' && (
+            <div className="bg-white rounded-xl border p-6 mt-4">
+              <h3 className="font-bold mb-1">📢 Ad Requests</h3>
+              <p className="text-xs text-gray-500 mb-4">Businesses that submitted ads from the user site. Approving puts the ad LIVE on the home page (visitors too) and every user dashboard. The submitter is notified either way.</p>
+              {ads.filter(a => a.status === 'pending').length === 0 && ads.filter(a => a.status === 'approved').length === 0 ? (
+                <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No ads submitted yet.</div>
+              ) : (
+                <>
+                  {ads.filter(a => a.status === 'pending').map(a => (
+                    <div key={a.id} className="border rounded-xl p-4 mb-3">
+                      <div className="flex flex-wrap justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span></div>
+                          <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{a.description || '—'}</div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact, a.website, a.submitter_email, a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : ''].filter(Boolean).join(' • ')}</div>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button disabled={busy} onClick={() => reviewAd(a, true)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Go Live</button>
+                          <button disabled={busy} onClick={() => reviewAd(a, false)} className="border border-red-200 text-red-600 hover:bg-red-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">Decline</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {ads.filter(a => a.status === 'approved').length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-[11px] font-bold text-gray-400 mb-2">LIVE ADS ({ads.filter(a => a.status === 'approved').length})</div>
+                      {ads.filter(a => a.status === 'approved').map(a => (
+                        <div key={a.id} className="flex flex-wrap justify-between items-center gap-2 border-b last:border-0 py-2.5 text-sm">
+                          <div className="min-w-0"><span className="font-medium">{a.business_name}</span> <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">LIVE</span><div className="text-[11px] text-gray-400">{a.contact || a.website || ''}</div></div>
+                          <button disabled={busy} onClick={() => reviewAd(a, false)} className="text-[11px] text-red-500 border border-red-200 px-3 py-1 rounded-full disabled:opacity-60">Take Down</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 
