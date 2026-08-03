@@ -43,6 +43,185 @@ function currentWeekRange() {
 
 const USER_REF = 'payround-omega.vercel.app/signup?ref=';
 
+/* ================= OVERALL ANALYTICS — pure-SVG charts (no chart library) ================= */
+const PERIOD_OPTIONS = [
+  { id: 'month', label: 'This Month' },
+  { id: 'lastMonth', label: 'Last Month' },
+  { id: 'year', label: 'This Year' },
+  { id: 'all', label: 'All Time' },
+];
+
+const compactNum = (v) => {
+  const n = Math.abs(Number(v || 0));
+  if (n >= 1e6) { const x = Math.round(n / 1e5) / 10; return `${x % 1 === 0 ? Math.round(x) : x}M`; }
+  if (n >= 1e3) { const x = Math.round(n / 1e2) / 10; return `${x % 1 === 0 ? Math.round(x) : x}K`; }
+  return String(Math.round(n));
+};
+
+// Buckets per period — month views chunk into 5-day spans (like the design), year/all use months.
+function analyticsBuckets(periodKey, earliestTs) {
+  const now = new Date();
+  const day = 86400000;
+  const buckets = [];
+  if (periodKey === 'month' || periodKey === 'lastMonth') {
+    const first = periodKey === 'month' ? new Date(now.getFullYear(), now.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endAll = (periodKey === 'month' ? now : new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)).getTime();
+    const cur = new Date(first); cur.setHours(0, 0, 0, 0);
+    while (cur.getTime() <= endAll) {
+      const end = Math.min(cur.getTime() + 5 * day - 1, endAll);
+      buckets.push({ label: cur.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), start: cur.getTime(), end });
+      cur.setTime(end + 1);
+    }
+    return buckets;
+  }
+  const start = periodKey === 'year' ? new Date(now.getFullYear(), 0, 1) : new Date(earliestTs || new Date(now.getFullYear(), 0, 1).getTime());
+  let cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cur.getTime() <= now.getTime()) {
+    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    const yr = ` ’${String(cur.getFullYear()).slice(2)}`;
+    buckets.push({ label: cur.toLocaleDateString('en-US', { month: 'short' }) + (periodKey === 'all' || cur.getFullYear() !== now.getFullYear() ? yr : ''), start: cur.getTime(), end: Math.min(next.getTime() - 1, now.getTime()) });
+    cur = next;
+  }
+  return buckets;
+}
+
+function PeriodSelect({ value, onChange }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 font-medium shadow-sm focus:outline-none">
+      {PERIOD_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+    </select>
+  );
+}
+
+// Purple growth line with soft area fill + hover tooltip
+function GrowthLineChart({ data }) {
+  const [hover, setHover] = useState(null);
+  const W = 620, H = 210, PL = 42, PR = 14, PT = 18, PB = 28;
+  const maxV = Math.max(1, ...data.map(d => d.value));
+  const niceMax = Math.max(1, Math.ceil(maxV * 1.2));
+  const X = (i) => (data.length <= 1 ? PL + (W - PL - PR) / 2 : PL + (i / (data.length - 1)) * (W - PL - PR));
+  const Y = (v) => PT + (1 - v / niceMax) * (H - PT - PB);
+  const line = data.map((d, i) => `${X(i)},${Y(d.value)}`).join(' ');
+  const area = `${PL},${Y(0)} ${line} ${X(data.length - 1)},${Y(0)}`;
+  const labelEvery = Math.max(1, Math.ceil(data.length / 6));
+  const zoneW = (W - PL - PR) / Math.max(1, data.length);
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" onMouseLeave={() => setHover(null)}>
+        <defs>
+          <linearGradient id="growthFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {[0.25, 0.5, 0.75, 1].map(f => (
+          <g key={f}>
+            <line x1={PL} x2={W - PR} y1={Y(niceMax * f)} y2={Y(niceMax * f)} stroke="#eef0f4" strokeWidth="1" />
+            <text x={PL - 6} y={Y(niceMax * f) + 3} textAnchor="end" fontSize="9" fill="#9ca3af">{compactNum(niceMax * f)}</text>
+          </g>
+        ))}
+        <line x1={PL} x2={W - PR} y1={Y(0)} y2={Y(0)} stroke="#e5e7eb" strokeWidth="1" />
+        <text x={PL - 6} y={Y(0) + 3} textAnchor="end" fontSize="9" fill="#9ca3af">0</text>
+        {data.length > 0 && <polygon points={area} fill="url(#growthFill)" />}
+        {data.length > 0 && <polyline points={line} fill="none" stroke="#7c3aed" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
+        {data.map((d, i) => (
+          <circle key={i} cx={X(i)} cy={Y(d.value)} r={hover === i ? 5 : 3.5} fill="#fff" stroke="#7c3aed" strokeWidth="2" />
+        ))}
+        {data.map((d, i) => (
+          <text key={`l${i}`} x={X(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="#9ca3af">{i % labelEvery === 0 || i === data.length - 1 ? d.label : ''}</text>
+        ))}
+        {data.map((d, i) => (
+          <rect key={`h${i}`} x={X(i) - zoneW / 2} y={PT} width={zoneW} height={H - PT - PB} fill="transparent" onMouseEnter={() => setHover(i)} />
+        ))}
+      </svg>
+      {hover !== null && data[hover] && (
+        <div className="absolute pointer-events-none bg-white border border-gray-200 shadow-lg rounded-lg px-3 py-1.5 text-xs z-10"
+          style={{ left: `${(X(hover) / W) * 100}%`, top: `${(Y(data[hover].value) / H) * 100}%`, transform: 'translate(-50%, -118%)' }}>
+          <div className="text-gray-400 text-[10px] whitespace-nowrap">{data[hover].hint}</div>
+          <div className="font-bold text-gray-900 text-base leading-tight whitespace-nowrap">{data[hover].value.toLocaleString()} <span className="text-[11px] font-semibold text-gray-500">Users</span></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Donut — Active (green) / Pending (orange) / Frozen (red) with counts + percentages
+function GroupsDonut({ segments }) {
+  const total = segments.reduce((a, x) => a + x.value, 0);
+  const R = 62, CIRC = 2 * Math.PI * R;
+  let acc = 0;
+  return (
+    <div className="flex items-center gap-5 flex-wrap">
+      <svg viewBox="0 0 160 160" className="w-36 h-36 shrink-0 mx-auto">
+        <circle cx="80" cy="80" r={R} fill="none" stroke="#f1f2f6" strokeWidth="26" />
+        {total > 0 && segments.map(seg => {
+          const frac = seg.value / total;
+          const el = (
+            <circle key={seg.label} cx="80" cy="80" r={R} fill="none" stroke={seg.color} strokeWidth="26"
+              strokeDasharray={`${frac * CIRC} ${CIRC}`} strokeDashoffset={-acc * CIRC} transform="rotate(-90 80 80)" />
+          );
+          acc += frac;
+          return el;
+        })}
+      </svg>
+      <div className="space-y-3.5 min-w-[150px]">
+        {segments.map(seg => {
+          const pct = total ? Math.round((seg.value / total) * 100) : 0;
+          return (
+            <div key={seg.label} className="flex items-start gap-2">
+              <span className="w-3 h-3 rounded-sm mt-0.5 shrink-0" style={{ background: seg.color }} />
+              <div>
+                <div className="text-xs font-semibold text-gray-600">{seg.label}</div>
+                <div className="text-sm font-bold text-gray-900">{seg.value.toLocaleString()} <span className="text-[11px] font-semibold text-gray-400">({pct}%)</span></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Contributions (purple) vs Payouts (green) — grouped bars
+function MoneyBars({ data }) {
+  const W = 620, H = 210, PL = 44, PR = 10, PT = 16, PB = 28;
+  const maxV = Math.max(1, ...data.map(d => Math.max(d.a, d.b)));
+  const niceMax = Math.ceil(maxV * 1.15);
+  const Y = (v) => PT + (1 - v / niceMax) * (H - PT - PB);
+  const groupW = (W - PL - PR) / Math.max(1, data.length);
+  const barW = Math.max(4, Math.min(18, groupW / 2 - 4));
+  const labelEvery = Math.max(1, Math.ceil(data.length / 7));
+  return (
+    <div>
+      <div className="flex items-center gap-4 text-[11px] text-gray-500 mb-2">
+        <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-purple-600 inline-block" /> Contributions</span>
+        <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" /> Payouts</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
+        {[0.25, 0.5, 0.75, 1].map(f => (
+          <g key={f}>
+            <line x1={PL} x2={W - PR} y1={Y(niceMax * f)} y2={Y(niceMax * f)} stroke="#eef0f4" strokeWidth="1" />
+            <text x={PL - 6} y={Y(niceMax * f) + 3} textAnchor="end" fontSize="9" fill="#9ca3af">{compactNum(niceMax * f)}</text>
+          </g>
+        ))}
+        <line x1={PL} x2={W - PR} y1={Y(0)} y2={Y(0)} stroke="#e5e7eb" strokeWidth="1" />
+        <text x={PL - 6} y={Y(0) + 3} textAnchor="end" fontSize="9" fill="#9ca3af">0</text>
+        {data.map((d, i) => {
+          const cx = PL + groupW * i + groupW / 2;
+          return (
+            <g key={i}>
+              <rect x={cx - barW - 1.5} y={Y(d.a)} width={barW} height={Math.max(0.5, Y(0) - Y(d.a))} rx="3" fill="#7c3aed"><title>{`${d.label} — Contributions ₦${d.a.toLocaleString()}`}</title></rect>
+              <rect x={cx + 1.5} y={Y(d.b)} width={barW} height={Math.max(0.5, Y(0) - Y(d.b))} rx="3" fill="#22c55e"><title>{`${d.label} — Payouts ₦${d.b.toLocaleString()}`}</title></rect>
+              <text x={cx} y={H - 8} textAnchor="middle" fontSize="9" fill="#9ca3af">{i % labelEvery === 0 || i === data.length - 1 ? d.label : ''}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+
 const MENU = [
   { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
   { id: 'groups', icon: '👥', label: 'Groups' },
@@ -104,6 +283,10 @@ export default function OwnerPanel() {
   const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
   const [siteControls, setSiteControls] = useState({ plan1m: DEFAULT_OWNER_SETTINGS.plan_1m, plan6m: DEFAULT_OWNER_SETTINGS.plan_6m, plan12m: DEFAULT_OWNER_SETTINGS.plan_12m, statsUsers: '', statsGroups: '', statsSaved: '', statsSatisfaction: '' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paymentsAll, setPaymentsAll] = useState([]);   // approved receipts → Contributions chart
+  const [payoutsAll, setPayoutsAll] = useState([]);     // collected payouts → Payouts chart
+  const [growthPeriod, setGrowthPeriod] = useState('month');
+  const [moneyPeriod, setMoneyPeriod] = useState('month');
 
   const handleMenuClick = (menu) => {
     setActiveMenu(menu);
@@ -183,6 +366,9 @@ export default function OwnerPanel() {
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
     setAds(await safe(supabase.from('ads').select('*')));
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
+    // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
+    setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false })));
+    setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false })));
   };
 
   const notify = async (type, groupId, message, userEmail) => {
@@ -343,11 +529,13 @@ export default function OwnerPanel() {
       if (approve) {
         const all = JSON.parse(r.changes || '{}');
         // Safety: only these fields may ever be applied
-        const allowed = ['name', 'description', 'amount', 'frequency', 'max_members'];
+        const allowed = ['name', 'description', 'amount', 'frequency', 'max_members', 'payout_amount', 'frequency_days'];
         const clean = {};
         allowed.forEach(k => { if (all[k] !== undefined) clean[k] = all[k]; });
         if (clean.amount !== undefined) clean.amount = Number(clean.amount) || 0;
         if (clean.max_members !== undefined) clean.max_members = parseInt(clean.max_members, 10) || null;
+        if (clean.payout_amount !== undefined) clean.payout_amount = Number(clean.payout_amount) > 0 ? Number(clean.payout_amount) : null;
+        if (clean.frequency_days !== undefined) clean.frequency_days = parseInt(clean.frequency_days, 10) > 0 ? parseInt(clean.frequency_days, 10) : null;
         const { error } = await supabase.from('groups').update(clean).eq('id', r.group_id);
         if (error) throw error;
       }
@@ -614,12 +802,26 @@ export default function OwnerPanel() {
     ...ads.map(a => ({ id: `a-${a.id}`, type: 'Ad placement', from: a.submitter_email, name: a.business_name, amount: a.price, date: a.submitted_at, receipt: a.payment_receipt_url })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
-  const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - (13 - i)); return d; });
-  const growth = days.map(d => {
-    const key = d.toDateString();
-    return { label: `${d.getDate()}/${d.getMonth() + 1}`, count: usersList.filter(u => u.created_at && new Date(u.created_at).toDateString() === key).length };
-  });
-  const maxGrowth = Math.max(1, ...growth.map(g => g.count));
+  /* ---------- OVERALL ANALYTICS derived data (live from Supabase) ---------- */
+  const datedTs = [...usersList.map(u => u.created_at), ...groups.map(g => g.created_at)].filter(Boolean).map(t => new Date(t).getTime());
+  const earliestTs = datedTs.length ? Math.min(...datedTs) : Date.now();
+  const analyticFrozen = groups.filter(g => g.is_frozen || ['frozen', 'trial_frozen'].includes(g.status));
+  const donutSegments = [
+    { label: 'Active Groups', value: groups.filter(g => g.status === 'active' && !g.is_frozen).length, color: '#22c55e' },
+    { label: 'Pending Groups', value: pendingGroups.length, color: '#f59e0b' },
+    { label: 'Frozen Groups', value: analyticFrozen.length, color: '#ef4444' },
+  ];
+  const growthData = analyticsBuckets(growthPeriod, earliestTs).map(b => ({
+    label: b.label,
+    hint: new Date(b.end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    value: usersList.filter(u => u.created_at && new Date(u.created_at).getTime() <= b.end).length,
+  }));
+  const inBucket = (ts, b) => ts && new Date(ts).getTime() >= b.start && new Date(ts).getTime() <= b.end;
+  const moneyData = analyticsBuckets(moneyPeriod, earliestTs).map(b => ({
+    label: b.label,
+    a: paymentsAll.filter(x => x.status === 'approved' && inBucket(x.reviewed_at || x.created_at, b)).reduce((sum, x) => sum + (Number(x.amount) || 0), 0),
+    b: payoutsAll.filter(x => inBucket(x.created_at, b)).reduce((sum, x) => sum + (Number(x.amount) || 0), 0),
+  }));
 
   const title = activeMenu === 'dashboard' ? 'Dashboard Overview' : (MENU.find(m => m.id === activeMenu)?.label || 'Dashboard');
 
@@ -727,9 +929,39 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 1. DASHBOARD */}
+          {/* 1. DASHBOARD — Overall Analytics */}
           {activeMenu === 'dashboard' && (
             <>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Overall Analytics</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Live from Supabase — the real numbers behind everything happening on the user site.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="font-bold text-gray-800">User Growth</h3>
+                    <PeriodSelect value={growthPeriod} onChange={setGrowthPeriod} />
+                  </div>
+                  <GrowthLineChart data={growthData} />
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                  <h3 className="font-bold text-gray-800 mb-4">Groups Overview</h3>
+                  <div className="min-h-[190px] flex items-center">
+                    <GroupsDonut segments={donutSegments} />
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="font-bold text-gray-800">Contributions vs Payouts</h3>
+                    <PeriodSelect value={moneyPeriod} onChange={setMoneyPeriod} />
+                  </div>
+                  <MoneyBars data={moneyData} />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Users Registered</div>
@@ -739,33 +971,7 @@ export default function OwnerPanel() {
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Active Groups</div>
                   <div className="font-bold text-3xl mt-1">{activeGroups.length}</div>
-                  <div className="text-[10px] text-green-600 mt-1">{verifiedGroups.length} verified • {pendingGroups.length} pending</div>
-                </div>
-              </div>
-
-              <div className="grid md:grid-cols-3 gap-6">
-                <div className="md:col-span-2 bg-white rounded-xl border p-5">
-                  <h3 className="font-bold mb-1">Users Growth</h3>
-                  <p className="text-[11px] text-gray-400 mb-4">Registrations with dates — last 14 days</p>
-                  <div className="flex items-end gap-1.5 h-40">
-                    {growth.map((g, i) => (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                        <span className="text-[9px] text-gray-500 font-bold">{g.count > 0 ? g.count : ''}</span>
-                        <div className={`w-full rounded-t-md ${g.count > 0 ? 'bg-purple-600' : 'bg-purple-100'}`} style={{ height: `${Math.max(3, (g.count / maxGrowth) * 100)}%` }} title={`${g.label}: ${g.count} signups`} />
-                        <span className="text-[8px] text-gray-400 truncate w-full text-center">{i % 2 === 0 ? g.label : ''}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="bg-white rounded-xl border p-5">
-                  <h3 className="font-bold mb-4">Group Overview</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between"><span>Active groups</span><span className="font-bold text-green-700">{activeGroups.length}</span></div>
-                    <div className="flex justify-between"><span>Pending approval</span><span className="font-bold text-amber-600">{pendingGroups.length}</span></div>
-                    <div className="flex justify-between"><span>Frozen</span><span className="font-bold text-blue-700">{frozenGroups.length}</span></div>
-                    <div className="flex justify-between"><span>Rejected</span><span className="font-bold text-red-600">{groups.filter(g => g.status === 'rejected').length}</span></div>
-                    <div className="flex justify-between border-t pt-2"><span>Total</span><span className="font-bold">{groups.length}</span></div>
-                  </div>
+                  <div className="text-[10px] text-green-600 mt-1">{verifiedGroups.length} verified • {pendingGroups.length} pending • {analyticFrozen.length} frozen</div>
                 </div>
               </div>
 
@@ -778,6 +984,8 @@ export default function OwnerPanel() {
                   </div>
                 )) : <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No active groups yet — groups appear here after you approve them in the Groups tab.</div>}
               </div>
+
+              <p className="text-center text-xs text-gray-400 pt-5 mt-1 border-t border-gray-100">© {new Date().getFullYear()} PayRound Technologies. All rights reserved.</p>
             </>
           )}
 
@@ -836,7 +1044,7 @@ export default function OwnerPanel() {
                 <div className="bg-white rounded-xl border p-5">
                   <h3 className="font-bold mb-1">✏️ Group Edit Requests</h3>
                   <p className="text-xs text-gray-500 mb-3">
-                    Group admins can request changes to core details (name, contribution, frequency, number of spots).
+                    Group admins can request changes to core details (name, contribution, frequency, number of spots, payout per spot).
                     <b>Approve</b> applies the change instantly and notifies the admin; <b>decline</b> asks for a reason the admin sees on their side.
                   </p>
                   {pendingEditRequests.length === 0 && editRequests.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No edit requests yet.</div>}
@@ -844,8 +1052,14 @@ export default function OwnerPanel() {
                     const g = groups.find(x => x.id === r.group_id) || {};
                     let changes = {};
                     try { changes = JSON.parse(r.changes || '{}'); } catch {}
-                    const pretty = (k, v) => k === 'amount' ? `₦${Number(v).toLocaleString()}` : (v === '' || v === null ? '—' : String(v));
-                    const cur = (k) => k === 'amount' ? `₦${Number(g.amount || 0).toLocaleString()}` : (g[k] ?? '—');
+                    const pretty = (k, v) => {
+                      if (v === undefined || v === null || v === '' || v === '—') return k === 'payout_amount' ? 'full pot' : '—';
+                      if (k === 'amount' || k === 'payout_amount') return Number(v) > 0 ? `₦${Number(v).toLocaleString()}` : (k === 'payout_amount' ? 'full pot' : '—');
+                      if (k === 'frequency_days') return `every ${v} days`;
+                      if (k === 'max_members') return `${v} spots`;
+                      return String(v);
+                    };
+                    const cur = (k) => g[k];
                     return (
                       <div key={r.id} className={`border rounded-xl p-3 mb-3 ${r.status === 'pending' ? 'border-amber-300 bg-amber-50/40' : 'opacity-70'}`}>
                         <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
@@ -858,7 +1072,7 @@ export default function OwnerPanel() {
                         <div className="mt-2 space-y-1">
                           {Object.entries(changes).map(([k, v]) => (
                             <div key={k} className="text-xs bg-white border rounded-lg px-2.5 py-1.5 flex items-center gap-2">
-                              <span className="font-semibold capitalize text-gray-700">{k === 'max_members' ? 'number of spots' : k}</span>
+                              <span className="font-semibold capitalize text-gray-700">{k === 'max_members' ? 'number of spots' : k === 'payout_amount' ? 'payout per spot' : k === 'frequency_days' ? 'custom days' : k}</span>
                               <span className="text-gray-400 line-through truncate">{pretty(k, cur(k))}</span>
                               <span className="text-gray-400">→</span>
                               <span className="font-bold text-purple-700 truncate">{pretty(k, v)}</span>
@@ -1351,7 +1565,10 @@ export default function OwnerPanel() {
         <div className="grid md:grid-cols-2 gap-5 mt-4">
           <div>
             <div className="text-xs font-bold text-gray-500 mb-1">GROUP DETAILS</div>
-            {infoRow('Amount', `₦${Number(g.amount).toLocaleString()} ${g.frequency || ''}`)}
+            {infoRow('Amount', `₦${Number(g.amount).toLocaleString()} ${String(g.frequency || '').toLowerCase() === 'custom' ? `every ${g.frequency_days || '?'} days` : (g.frequency || '')}`)}
+            {Number(g.payout_amount) > 0
+              ? infoRow('Payout per spot', `₦${Number(g.payout_amount).toLocaleString()} (admin interest ≈ ₦${(((Number(g.amount) || 0) * (parseInt(g.max_members, 10) || 0)) - Number(g.payout_amount)).toLocaleString()} / round)`)
+              : infoRow('Payout per spot', `Full pot ₦${((Number(g.amount) || 0) * (parseInt(g.max_members, 10) || 0)).toLocaleString()}`)}
             {g.plan_months ? infoRow('Plan', `${g.plan_months} month${g.plan_months > 1 ? 's' : ''} — ₦${Number(g.plan_price || 0).toLocaleString()}`) : null}
             {g.expiry_at ? infoRow('Plan expires', new Date(g.expiry_at).toLocaleDateString()) : null}
             {infoRow('Max members', g.max_members)}

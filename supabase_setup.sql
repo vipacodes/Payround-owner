@@ -536,3 +536,14 @@ CREATE POLICY ger_insert ON group_edit_requests FOR INSERT WITH CHECK (true);
 CREATE POLICY ger_update ON group_edit_requests FOR UPDATE USING (true);
 CREATE POLICY ger_delete ON group_edit_requests FOR DELETE USING (true);
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- v3.2 — Custom frequency + admin payout/interest (Aug 2026)
+-- =====================================================================
+-- groups.frequency_days — when frequency = 'Custom', members contribute every N days
+-- groups.payout_amount  — what ONE spot collects on its turn (empty = full pot);
+--                          the gap between the full pot and this payout is the
+--                          group admin's interest (member side never shows it)
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS frequency_days integer;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS payout_amount numeric;
+NOTIFY pgrst, 'reload schema';
