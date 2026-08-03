@@ -85,6 +85,8 @@ export default function OwnerPanel() {
   const [memberReviews, setMemberReviews] = useState([]);
   const [verifyRequests, setVerifyRequests] = useState([]);
   const [ads, setAds] = useState([]);
+  const [editRequests, setEditRequests] = useState([]);  // group edits sent by group admins — need your approval
+  const [editDeclineReasons, setEditDeclineReasons] = useState({}); // per-request decline reason text
 
   const [profileView, setProfileView] = useState(null); // { type:'user'|'group', data:{...}, request? }
   const [photoPendingUsers, setPhotoPendingUsers] = useState([]); // full rows of users awaiting photo approval
@@ -136,6 +138,22 @@ export default function OwnerPanel() {
 
   useEffect(() => { if (isOwner) loadData(); }, [isOwner]);
 
+  // 📛 App icon badge — the installed owner app shows how many items need a decision
+  useEffect(() => {
+    try {
+      const total =
+        groups.filter(g => g.status === 'pending_owner').length +
+        usersList.filter(u => !(u.is_approved === true || u.approval_status === 'approved')).length +
+        verifyRequests.filter(r => r.status === 'pending').length +
+        photoPendingUsers.length +
+        editRequests.filter(r => r.status === 'pending').length;
+      if ('setAppBadge' in navigator) {
+        if (total > 0) navigator.setAppBadge(total).catch(() => {});
+        else if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+      }
+    } catch {}
+  }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests]);
+
   const loadData = async () => {
     const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
     setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
@@ -164,6 +182,7 @@ export default function OwnerPanel() {
     setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
     setAds(await safe(supabase.from('ads').select('*')));
+    setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
   };
 
   const notify = async (type, groupId, message, userEmail) => {
@@ -278,6 +297,75 @@ export default function OwnerPanel() {
       setMsg(`${u.name || u.email} declined.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Decline failed: ${e.message}. If it mentions "approval_status", run the v1.3 migration SQL.`); }
+    setBusy(false);
+  };
+
+  /* ---------- ❄️ FREEZE / 🔥 UNFREEZE (users & groups) — frozen things pause instantly on the user site ---------- */
+  const freezeUser = async (u, freeze) => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { error } = await supabase.from('users').update({ is_frozen: freeze }).eq('id', u.id);
+      if (error) throw error;
+      await notify(freeze ? 'account_frozen' : 'account_unfrozen', null,
+        freeze
+          ? '❄️ Your PayRound account has been frozen — the app is paused for you. Contact support on WhatsApp (+234 915 1723 199) if this seems wrong.'
+          : '🔥 Your PayRound account is active again — welcome back! You can use the app normally.',
+        u.email);
+      setMsg(freeze ? `❄️ ${u.name || u.email} is now FROZEN — their app is blocked.` : `🔥 ${u.name || u.email} is unfrozen.`);
+      setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
+      loadData();
+    } catch (e) { setErr(`Freeze failed: ${e.message}`); }
+    setBusy(false);
+  };
+
+  const freezeGroup = async (g, freeze) => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { error } = await supabase.from('groups').update({ is_frozen: freeze }).eq('id', g.id);
+      if (error) throw error;
+      await notify(freeze ? 'group_frozen' : 'group_unfrozen', g.id,
+        freeze
+          ? `❄️ Your group "${g.name}" was frozen by PayRound — joining, payments and chat are paused. Contact support if this seems wrong.`
+          : `🔥 Your group "${g.name}" is unfrozen — everything works again.`,
+        g.admin_email);
+      setMsg(freeze ? `❄️ "${g.name}" is FROZEN — hidden from search, members see a frozen notice.` : `🔥 "${g.name}" is unfrozen.`);
+      setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
+      loadData();
+    } catch (e) { setErr(`Freeze failed: ${e.message}`); }
+    setBusy(false);
+  };
+
+  /* ---------- ✏️ GROUP EDIT REQUESTS — approve applies the changes live; decline asks for a reason ---------- */
+  const reviewGroupEdit = async (r, approve, reason = '') => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const g = groups.find(x => x.id === r.group_id) || {};
+      if (approve) {
+        const all = JSON.parse(r.changes || '{}');
+        // Safety: only these fields may ever be applied
+        const allowed = ['name', 'description', 'amount', 'frequency', 'max_members'];
+        const clean = {};
+        allowed.forEach(k => { if (all[k] !== undefined) clean[k] = all[k]; });
+        if (clean.amount !== undefined) clean.amount = Number(clean.amount) || 0;
+        if (clean.max_members !== undefined) clean.max_members = parseInt(clean.max_members, 10) || null;
+        const { error } = await supabase.from('groups').update(clean).eq('id', r.group_id);
+        if (error) throw error;
+      }
+      const { error: e2 } = await supabase.from('group_edit_requests').update({
+        status: approve ? 'approved' : 'declined',
+        decline_reason: approve ? null : (reason.trim() || null),
+        reviewed_at: new Date().toISOString(),
+      }).eq('id', r.id);
+      if (e2) throw e2;
+      await notify(approve ? 'group_edit_approved' : 'group_edit_declined', r.group_id,
+        approve
+          ? `✅ Great news — your change request for "${g.name || r.group_id}" was APPROVED and is now live: ${r.summary}`
+          : `❌ Your change request for "${g.name || r.group_id}" was declined${reason.trim() ? ` — reason: ${reason.trim()}` : ''}. You can adjust and send a new request.`,
+        r.admin_email);
+      setMsg(approve ? `Edit applied to "${g.name}" — the admin was notified.` : `Edit declined — the admin was notified with your reason.`);
+      setEditDeclineReasons(prev => ({ ...prev, [r.id]: '' }));
+      loadData();
+    } catch (e) { setErr(`Review failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -508,6 +596,7 @@ export default function OwnerPanel() {
       || (g.admin_name || '').toLowerCase().includes(q)
       || (g.admin_email || '').toLowerCase().includes(q);
   };
+  const pendingEditRequests = editRequests.filter(r => r.status === 'pending');
   const verifiedUsers = usersList.filter(u => u.is_verified);
   const groupRequests = verifyRequests.filter(r => (r.subject_type || 'group') === 'group' && r.status === 'pending');
   const userRequests = verifyRequests.filter(r => r.subject_type === 'user' && r.status === 'pending');
@@ -695,7 +784,7 @@ export default function OwnerPanel() {
           {/* 2. GROUPS */}
           {activeMenu === 'groups' && (
             <div className="space-y-4">
-              {subPills([{ id: 'active', label: '✅ Active Groups', count: activeGroups.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingGroups.length }], groupsSub, setGroupsSub)}
+              {subPills([{ id: 'active', label: '✅ Active Groups', count: activeGroups.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingGroups.length }, { id: 'edits', label: '✏️ Edit Requests', count: pendingEditRequests.length }], groupsSub, setGroupsSub)}
 
               {/* Search groups (name, ID, or admin) */}
               <input
@@ -712,7 +801,7 @@ export default function OwnerPanel() {
                   {activeGroups.filter(matchGroup).map(g => (
                     <div key={g.id} className="border-b last:border-0 py-3 text-sm flex justify-between items-center gap-3">
                       <div className="min-w-0">
-                        <div className="font-medium">{g.name} {g.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">• ID: {g.id}</span></div>
+                        <div className="font-medium">{g.name} {g.is_verified && <BlueBadge />} {g.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>} <span className="text-xs text-gray-500">• ID: {g.id}</span></div>
                         <div className="text-xs text-gray-500">Admin: {g.admin_name || g.admin_email} • <Stars n={Math.round(avgRating(g.id))} /> ({groupRatings(g.id).length} reviews) • Badge: {badgeEmoji(g.badge_tier)} {g.badge_tier || 'Bronze'}</div>
                       </div>
                       <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1 shrink-0 hover:bg-gray-50">View Profile →</button>
@@ -740,6 +829,62 @@ export default function OwnerPanel() {
                     </div>
                   ))}
                   {pendingGroups.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">{groupSearch ? `No groups match "${groupSearch}".` : 'No groups waiting for review.'}</div>}
+                </div>
+              )}
+
+              {groupsSub === 'edits' && (
+                <div className="bg-white rounded-xl border p-5">
+                  <h3 className="font-bold mb-1">✏️ Group Edit Requests</h3>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Group admins can request changes to core details (name, contribution, frequency, number of spots).
+                    <b>Approve</b> applies the change instantly and notifies the admin; <b>decline</b> asks for a reason the admin sees on their side.
+                  </p>
+                  {pendingEditRequests.length === 0 && editRequests.length === 0 && <div className="text-center text-gray-500 py-8 border border-dashed rounded-xl text-sm">No edit requests yet.</div>}
+                  {editRequests.slice(0, 30).map(r => {
+                    const g = groups.find(x => x.id === r.group_id) || {};
+                    let changes = {};
+                    try { changes = JSON.parse(r.changes || '{}'); } catch {}
+                    const pretty = (k, v) => k === 'amount' ? `₦${Number(v).toLocaleString()}` : (v === '' || v === null ? '—' : String(v));
+                    const cur = (k) => k === 'amount' ? `₦${Number(g.amount || 0).toLocaleString()}` : (g[k] ?? '—');
+                    return (
+                      <div key={r.id} className={`border rounded-xl p-3 mb-3 ${r.status === 'pending' ? 'border-amber-300 bg-amber-50/40' : 'opacity-70'}`}>
+                        <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                          {g.name || r.group_id} <span className="text-xs text-gray-500 font-normal">• {r.admin_email}</span>
+                          {r.status === 'approved' && <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full">approved</span>}
+                          {r.status === 'declined' && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full">declined</span>}
+                          {r.status === 'pending' && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">waiting for you</span>}
+                        </div>
+                        <div className="text-[11px] text-gray-400 mt-0.5">{r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
+                        <div className="mt-2 space-y-1">
+                          {Object.entries(changes).map(([k, v]) => (
+                            <div key={k} className="text-xs bg-white border rounded-lg px-2.5 py-1.5 flex items-center gap-2">
+                              <span className="font-semibold capitalize text-gray-700">{k === 'max_members' ? 'number of spots' : k}</span>
+                              <span className="text-gray-400 line-through truncate">{pretty(k, cur(k))}</span>
+                              <span className="text-gray-400">→</span>
+                              <span className="font-bold text-purple-700 truncate">{pretty(k, v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {r.status === 'pending' && (
+                          <>
+                            <input
+                              value={editDeclineReasons[r.id] || ''}
+                              onChange={e => setEditDeclineReasons(prev => ({ ...prev, [r.id]: e.target.value }))}
+                              placeholder="Reason if you decline (shown to the group admin)…"
+                              className="w-full mt-3 border border-gray-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-red-300"
+                            />
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <button disabled={busy} onClick={() => { if (window.confirm(`APPLY these changes to "${g.name || r.group_id}"? They go live immediately.`)) reviewGroupEdit(r, true); }} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve & Apply</button>
+                              <button disabled={busy} onClick={() => reviewGroupEdit(r, false, editDeclineReasons[r.id] || '')} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline with reason</button>
+                              {g.id && <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50">👁 Group Profile</button>}
+                            </div>
+                          </>
+                        )}
+                        {r.status === 'declined' && r.decline_reason && <div className="text-[11px] text-red-600 mt-2">Decline reason sent: {r.decline_reason}</div>}
+                        {r.status === 'approved' && <div className="text-[11px] text-green-700 mt-2">✅ Applied live on the user site.</div>}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -778,7 +923,7 @@ export default function OwnerPanel() {
                 {usersSub === 'active' ? (
                   activeUsers.filter(matchUser).length > 0 ? activeUsers.filter(matchUser).map(u => (
                     <div key={u.id} className="border rounded-xl p-4">
-                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
                       <button onClick={() => openUserProfile(u)} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
@@ -787,7 +932,7 @@ export default function OwnerPanel() {
                 ) : (
                   pendingUsers.filter(matchUser).length > 0 ? pendingUsers.filter(matchUser).map(u => (
                     <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
-                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email} • Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</div>
                       {u.decline_reason && <div className="text-[11px] text-red-600 mt-1">Reason: {u.decline_reason}</div>}
@@ -1297,7 +1442,14 @@ export default function OwnerPanel() {
               <button disabled={busy} onClick={() => reviewVerification(request, false)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline Request</button>
             </>
           )}
+          <button disabled={busy} onClick={() => freezeGroup(g, !g.is_frozen)}
+            className={g.is_frozen
+              ? "bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60"
+              : "border border-sky-300 text-sky-700 bg-sky-50 hover:bg-sky-100 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-60"}>
+            {g.is_frozen ? '🔥 Unfreeze Group' : '❄️ Freeze Group'}
+          </button>
         </div>
+        <div className="text-[10px] text-gray-400 mt-2">❄️ Freezing hides the group from search and pauses joins, payments and chat on the user site until you unfreeze.</div>
       </div>
     );
   }
@@ -1439,6 +1591,12 @@ export default function OwnerPanel() {
           {approved && u.is_verified && (
             <button disabled={busy} onClick={() => verifyUserBadge(u, false)} className="bg-gray-100 text-gray-600 border border-gray-300 hover:bg-gray-200 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">Remove Blue Badge</button>
           )}
+          <button disabled={busy} onClick={() => freezeUser(u, !u.is_frozen)}
+            className={u.is_frozen
+              ? "bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60"
+              : "border border-sky-300 text-sky-700 bg-sky-50 hover:bg-sky-100 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-60"}>
+            {u.is_frozen ? '🔥 Unfreeze User' : '❄️ Freeze User'}
+          </button>
         </div>
         <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons).</div>
       </div>

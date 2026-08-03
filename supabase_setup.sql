@@ -503,3 +503,36 @@ NOTIFY pgrst, 'reload schema';
 ALTER TABLE members ADD COLUMN IF NOT EXISTS desired_spots text;
 ALTER TABLE members ADD COLUMN IF NOT EXISTS offered_spots text;
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================
+-- v3.1: Receipt stamps in group chat (image + linked payment + review status),
+--       admin payment remark on bank details, owner freeze flags on users/groups,
+--       and group edit requests that need owner approval
+-- =============================================
+ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS image_url text;
+ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS payment_id text;
+ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS receipt_status text; -- pending | approved | declined
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_remark text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_frozen boolean NOT NULL DEFAULT false;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_frozen boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS group_edit_requests (
+  id text PRIMARY KEY,
+  group_id text,
+  admin_email text,
+  changes text,           -- JSON: { field: newValue } — name/description/amount/frequency/max_members
+  summary text,           -- human-readable summary for the owner review screen
+  status text DEFAULT 'pending',
+  decline_reason text,
+  created_at timestamptz DEFAULT now(),
+  reviewed_at timestamptz
+);
+ALTER TABLE group_edit_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS ger_select ON group_edit_requests;
+DROP POLICY IF EXISTS ger_insert ON group_edit_requests;
+DROP POLICY IF EXISTS ger_update ON group_edit_requests;
+DROP POLICY IF EXISTS ger_delete ON group_edit_requests;
+CREATE POLICY ger_select ON group_edit_requests FOR SELECT USING (true);
+CREATE POLICY ger_insert ON group_edit_requests FOR INSERT WITH CHECK (true);
+CREATE POLICY ger_update ON group_edit_requests FOR UPDATE USING (true);
+CREATE POLICY ger_delete ON group_edit_requests FOR DELETE USING (true);
+NOTIFY pgrst, 'reload schema';
