@@ -557,3 +557,15 @@ NOTIFY pgrst, 'reload schema';
 DROP POLICY IF EXISTS group_messages_update ON group_messages;
 CREATE POLICY group_messages_update ON group_messages FOR UPDATE USING (true) WITH CHECK (true);
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- v3.4 — Group announcement box + admin auto-tick (3 Aug 2026)
+-- =====================================================================
+-- groups.announcement      — the admin's pinned 📢 message shown above the group
+--                            chat composer; stays until the admin clears it
+-- groups.admin_auto_paid   — TRUE (default): spots the admin holds tick themselves
+--                            paid every round, no receipts needed; FALSE: admin
+--                            uploads receipts like everyone else
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS announcement text;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS admin_auto_paid boolean DEFAULT true;
+NOTIFY pgrst, 'reload schema';
