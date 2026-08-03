@@ -547,3 +547,13 @@ NOTIFY pgrst, 'reload schema';
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS frequency_days integer;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS payout_amount numeric;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================
+-- v3.3 — Allow receipt stamps to update in group chat (3 Aug 2026 fix)
+-- =====================================================================
+-- Without this UPDATE policy, approving/declining a payment could NOT flip
+-- the receipt's stamp in the group chat (RLS silently blocked the update),
+-- so approved receipts kept showing "waiting for review" forever.
+DROP POLICY IF EXISTS group_messages_update ON group_messages;
+CREATE POLICY group_messages_update ON group_messages FOR UPDATE USING (true) WITH CHECK (true);
+NOTIFY pgrst, 'reload schema';
