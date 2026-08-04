@@ -589,3 +589,20 @@ CREATE POLICY "ads_insert_all" ON public.ads FOR INSERT WITH CHECK (true);
 DROP POLICY IF EXISTS "ads_select_all" ON public.ads;
 CREATE POLICY "ads_select_all" ON public.ads FOR SELECT USING (true);
 NOTIFY pgrst, 'reload schema';
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- v3.6  REAL PASSWORD RESET + EMAIL CHANGE
+-- /forgot-password generates a temporary password (reset_code) that works for
+-- 20 minutes (reset_expires). Logging in with it forces a password change.
+-- Users can also change their password & email in Settings (old password
+-- required); the email rewrite cascades every table that stores the address.
+-- ═══════════════════════════════════════════════════════════════════════════════
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS reset_code text;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS reset_expires timestamptz;
+DROP POLICY IF EXISTS "follows_update_all" ON public.follows;
+CREATE POLICY "follows_update_all" ON public.follows FOR UPDATE USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "group_reviews_update_all" ON public.group_reviews;
+CREATE POLICY "group_reviews_update_all" ON public.group_reviews FOR UPDATE USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "member_reviews_update_all" ON public.member_reviews;
+CREATE POLICY "member_reviews_update_all" ON public.member_reviews FOR UPDATE USING (true) WITH CHECK (true);
+NOTIFY pgrst, 'reload schema';
