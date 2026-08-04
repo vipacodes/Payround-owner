@@ -1505,8 +1505,8 @@ export default function OwnerPanel() {
                             <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-2 inline-block">⚠ No payment receipt yet — they may still be about to pay. Approving early is free-for-them.</p>
                           )}
                           {(() => { try { const m = JSON.parse(a.media_urls || '[]'); return Array.isArray(m) && m.length > 0 ? (
-                            <div className="flex gap-1.5 mt-2 flex-wrap">{m.slice(0, 6).map((src, i) => String(src).startsWith('data:video')
-                              ? <video key={i} src={src} muted playsInline className="w-14 h-14 rounded-lg object-cover border bg-black" />
+                            <div className="flex gap-1.5 mt-2 flex-wrap">{m.slice(0, 6).map((src, i) => (String(src).startsWith('data:video') || /\.(mp4|webm|mov|m4v|3gp|3gpp|ogg)(\?|#|$)/i.test(String(src)))
+                              ? <video key={i} src={src} muted playsInline controls className="w-14 h-14 rounded-lg object-cover border bg-black" />
                               : <img key={i} src={src} alt="" className="w-14 h-14 rounded-lg object-cover border" />)}<span className="text-[10px] text-gray-400 self-center">{m.length} item{m.length > 1 ? 's' : ''} (slideshow)</span></div>
                           ) : null; } catch { return null; } })()}
                         </div>

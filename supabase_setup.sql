@@ -663,3 +663,19 @@ SET message = '➕ ' || coalesce(nullif(trim((SELECT u.name FROM public.users u 
 FROM single s
 WHERE n.type = 'new_follower' AND lower(n.user_email) = s.fe_email AND n.message NOT LIKE '%[[FOL:%';
 NOTIFY pgrst, 'reload schema';
+
+-- =========================
+-- v3.9 — Ads media Storage bucket: videos as REAL files (up to 12–15MB),
+-- no more giant base64 crammed into the ads row (that was the "Submitting…" hangs).
+-- Bucket: ads-media → PUBLIC, 15MB per-file cap, image/* + video/* mime types only.
+-- Created via Storage REST API (POST /storage/v1/bucket) with the service key.
+-- Browser uploads go DIRECT from the user app with the anon key — enabled by the
+-- four policies below (already applied via the Management API; kept here for the record):
+-- =========================
+-- create policy ads_media_read   on storage.objects for select to anon, authenticated using (bucket_id = 'ads-media');
+-- create policy ads_media_insert on storage.objects for insert to anon, authenticated with check (bucket_id = 'ads-media');
+-- create policy ads_media_update on storage.objects for update to anon, authenticated using (bucket_id = 'ads-media') with check (bucket_id = 'ads-media');
+-- create policy ads_media_delete on storage.objects for delete to anon, authenticated using (bucket_id = 'ads-media');
+-- Files live at: ads-media/ads/<adId>/media-<n>-<ts>.<ext>
+-- The ads table rows now store those https URLs inside media_urls (JSON array);
+-- small media (photos, receipts) stay base64 data-URLs as before. Both render.
