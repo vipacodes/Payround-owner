@@ -569,3 +569,23 @@ NOTIFY pgrst, 'reload schema';
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS announcement text;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS admin_auto_paid boolean DEFAULT true;
 NOTIFY pgrst, 'reload schema';
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- v3.5  ADS PAY-FIRST FLOW
+-- Advertisers pick a duration (duration_days/price), pay the owner account, and
+-- upload payment_receipt_url AFTER the ad row exists (so leaving to pay never
+-- loses data). Users can delete their own ads. Approve stamps approved_at +
+-- expires_at; expired ads hide automatically on the user site.
+-- ═══════════════════════════════════════════════════════════════════════════════
+ALTER TABLE public.ads ALTER COLUMN payment_receipt_url DROP NOT NULL;
+ALTER TABLE public.ads ALTER COLUMN media_url DROP NOT NULL;
+ALTER TABLE public.ads ADD COLUMN IF NOT EXISTS receipt_uploaded_at timestamptz;
+DROP POLICY IF EXISTS "ads_update_all" ON public.ads;
+CREATE POLICY "ads_update_all" ON public.ads FOR UPDATE USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "ads_delete_all" ON public.ads;
+CREATE POLICY "ads_delete_all" ON public.ads FOR DELETE USING (true);
+DROP POLICY IF EXISTS "ads_insert_all" ON public.ads;
+CREATE POLICY "ads_insert_all" ON public.ads FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "ads_select_all" ON public.ads;
+CREATE POLICY "ads_select_all" ON public.ads FOR SELECT USING (true);
+NOTIFY pgrst, 'reload schema';

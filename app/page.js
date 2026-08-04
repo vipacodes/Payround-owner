@@ -281,7 +281,7 @@ export default function OwnerPanel() {
   const [announcementFile, setAnnouncementFile] = useState(null);
   const [pwHash, setPwHash] = useState(OWNER_PASSWORD_HASH_FALLBACK);
   const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
-  const [siteControls, setSiteControls] = useState({ plan1m: DEFAULT_OWNER_SETTINGS.plan_1m, plan6m: DEFAULT_OWNER_SETTINGS.plan_6m, plan12m: DEFAULT_OWNER_SETTINGS.plan_12m, statsUsers: '', statsGroups: '', statsSaved: '', statsSatisfaction: '' });
+  const [siteControls, setSiteControls] = useState({ plan1m: DEFAULT_OWNER_SETTINGS.plan_1m, plan6m: DEFAULT_OWNER_SETTINGS.plan_6m, plan12m: DEFAULT_OWNER_SETTINGS.plan_12m, ad1day: 500, ad1week: 3325, ad1month: 13500, statsUsers: '', statsGroups: '', statsSaved: '', statsSatisfaction: '' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paymentsAll, setPaymentsAll] = useState([]);   // approved receipts → Contributions chart
   const [payoutsAll, setPayoutsAll] = useState([]);     // collected payouts → Payouts chart
@@ -309,6 +309,9 @@ export default function OwnerPanel() {
             plan1m: s.plan_1m ?? DEFAULT_OWNER_SETTINGS.plan_1m,
             plan6m: s.plan_6m ?? DEFAULT_OWNER_SETTINGS.plan_6m,
             plan12m: s.plan_12m ?? DEFAULT_OWNER_SETTINGS.plan_12m,
+            ad1day: s.ad_1day ?? 500,
+            ad1week: s.ad_1week ?? 3325,
+            ad1month: s.ad_1month ?? 13500,
             statsUsers: s.stats_users_override ?? '',
             statsGroups: s.stats_groups_override ?? '',
             statsSaved: s.stats_saved_override ?? '',
@@ -656,6 +659,9 @@ export default function OwnerPanel() {
         plan_1m: Number(siteControls.plan1m) || DEFAULT_OWNER_SETTINGS.plan_1m,
         plan_6m: Number(siteControls.plan6m) || DEFAULT_OWNER_SETTINGS.plan_6m,
         plan_12m: Number(siteControls.plan12m) || DEFAULT_OWNER_SETTINGS.plan_12m,
+        ad_1day: Number(siteControls.ad1day) || 500,
+        ad_1week: Number(siteControls.ad1week) || 3325,
+        ad_1month: Number(siteControls.ad1month) || 13500,
         stats_users_override: num(siteControls.statsUsers), stats_groups_override: num(siteControls.statsGroups),
         stats_saved_override: num(siteControls.statsSaved), stats_satisfaction_override: num(siteControls.statsSatisfaction),
         updated_at: new Date().toISOString(),
@@ -690,19 +696,26 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
-  // Approve/decline submitted ads — approved ones go live on the home page + every user dashboard
+  // Approve/decline submitted ads — approving starts the paid clock: live for the purchased number of days
   const reviewAd = async (ad, approve) => {
     setBusy(true);
     try {
-      const { error } = await supabase.from('ads').update({ status: approve ? 'approved' : 'declined' }).eq('id', ad.id);
+      const patch = { status: approve ? 'approved' : 'declined' };
+      if (approve) {
+        const days = Number(ad.duration_days) || 7;
+        const now = Date.now();
+        patch.approved_at = new Date(now).toISOString();
+        patch.expires_at = new Date(now + days * 86400000).toISOString();
+      }
+      const { error } = await supabase.from('ads').update(patch).eq('id', ad.id);
       if (error) throw error;
       try {
         await notify('ad_review', null, approve
-          ? `📢 Your ad "${ad.business_name || 'Business'}" is now LIVE on PayRound — shown to visitors and on every user dashboard. 🎉`
+          ? `📢 Your ad "${ad.business_name || 'Business'}" is now LIVE on PayRound for ${Number(ad.duration_days) || 7} day(s) — shown to visitors and on every user dashboard. 🎉`
           : `Your ad "${ad.business_name || 'Business'}" was not approved this time. You can submit an improved ad anytime.`,
           (ad.submitter_email || '').toLowerCase() || null);
       } catch {}
-      setMsg(approve ? `Ad "${ad.business_name}" approved — now visible on the user site.` : `Ad "${ad.business_name}" declined — the submitter has been notified.`);
+      setMsg(approve ? `Ad "${ad.business_name}" approved — LIVE now for ${Number(ad.duration_days) || 7} day(s), then it comes down automatically.` : `Ad "${ad.business_name}" declined — the submitter has been notified.`);
       loadData();
     } catch (e) { setErr(`Ad review failed: ${e.message}`); }
     setBusy(false);
@@ -1358,9 +1371,18 @@ export default function OwnerPanel() {
                     <div key={a.id} className="border rounded-xl p-4 mb-3">
                       <div className="flex flex-wrap justify-between items-start gap-2">
                         <div className="min-w-0">
-                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span></div>
+                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span> <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">⏱ {Number(a.duration_days) || '?'} day(s) · ₦{Number(a.price || 0).toLocaleString()}</span></div>
                           <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{a.description || '—'}</div>
-                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email, a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : ''].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">📅 Submitted: {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : '—'}</div>
+                          {a.payment_receipt_url ? (
+                            <button onClick={() => setReceiptView({ type: 'Ad payment', name: a.business_name, from: a.submitter_email, date: a.receipt_uploaded_at || a.submitted_at, amount: a.price, receipt: a.payment_receipt_url })} className="mt-2 flex items-center gap-2" title="Tap to view the full receipt">
+                              <img src={a.payment_receipt_url} alt="payment receipt" className="w-14 h-14 rounded-lg object-cover border-2 border-emerald-300" />
+                              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full">🧾 Receipt uploaded{a.receipt_uploaded_at ? ` — ${new Date(a.receipt_uploaded_at).toLocaleDateString()}` : ''} · tap to view</span>
+                            </button>
+                          ) : (
+                            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-2 inline-block">⚠ No payment receipt yet — they may still be about to pay. Approving early is free-for-them.</p>
+                          )}
                           {(() => { try { const m = JSON.parse(a.media_urls || '[]'); return Array.isArray(m) && m.length > 0 ? (
                             <div className="flex gap-1.5 mt-2 flex-wrap">{m.slice(0, 6).map((src, i) => String(src).startsWith('data:video')
                               ? <video key={i} src={src} muted playsInline className="w-14 h-14 rounded-lg object-cover border bg-black" />
@@ -1377,12 +1399,26 @@ export default function OwnerPanel() {
                   {ads.filter(a => a.status === 'approved').length > 0 && (
                     <div className="mt-3">
                       <div className="text-[11px] font-bold text-gray-400 mb-2">LIVE ADS ({ads.filter(a => a.status === 'approved').length})</div>
-                      {ads.filter(a => a.status === 'approved').map(a => (
+                      {ads.filter(a => a.status === 'approved').map(a => {
+                        const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
+                        const left = a.expires_at ? Math.max(0, Math.ceil((new Date(a.expires_at).getTime() - Date.now()) / 86400000)) : null;
+                        return (
                         <div key={a.id} className="flex flex-wrap justify-between items-center gap-2 border-b last:border-0 py-2.5 text-sm">
-                          <div className="min-w-0"><span className="font-medium">{a.business_name}</span> <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">LIVE</span><div className="text-[11px] text-gray-400">{a.contact || a.website || ''}</div></div>
+                          <div className="min-w-0">
+                            <span className="font-medium">{a.business_name}</span>{' '}
+                            {expired
+                              ? <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ml-1">⌛ EXPIRED — hidden on site</span>
+                              : <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">LIVE</span>}
+                            <div className="text-[11px] text-gray-400">{[a.contact || a.phone || a.website || '', a.price ? `₦${Number(a.price).toLocaleString()}` : '', a.duration_days ? `${a.duration_days}d plan` : ''].filter(Boolean).join(' • ')}</div>
+                            <div className="text-[11px] text-gray-400">
+                              {a.submitted_at ? `Created ${new Date(a.submitted_at).toLocaleDateString()}` : ''}
+                              {a.expires_at ? ` · ${expired ? 'Ended' : 'Ends'} ${new Date(a.expires_at).toLocaleDateString()}${!expired && left !== null ? ` (${left} day${left === 1 ? '' : 's'} left)` : ''}` : ''}
+                            </div>
+                          </div>
                           <button disabled={busy} onClick={() => reviewAd(a, false)} className="text-[11px] text-red-500 border border-red-200 px-3 py-1 rounded-full disabled:opacity-60">Take Down</button>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </>
@@ -1458,6 +1494,15 @@ export default function OwnerPanel() {
                       <div><label className="text-[10px] text-gray-500">12 Months</label><input type="number" min="0" value={siteControls.plan12m} onChange={e => setSiteControls({ ...siteControls, plan12m: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
                     </div>
                     <p className="text-[10px] text-gray-400 mt-1">Creators pick a plan at group creation and upload the matching receipt. Currently ₦{Number(siteControls.plan1m).toLocaleString()} / ₦{Number(siteControls.plan6m).toLocaleString()} / ₦{Number(siteControls.plan12m).toLocaleString()}.</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold">Ad slot prices (₦) — what advertisers pay</label>
+                    <div className="grid grid-cols-3 gap-2 mt-1">
+                      <div><label className="text-[10px] text-gray-500">1 Day</label><input type="number" min="0" value={siteControls.ad1day} onChange={e => setSiteControls({ ...siteControls, ad1day: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                      <div><label className="text-[10px] text-gray-500">1 Week</label><input type="number" min="0" value={siteControls.ad1week} onChange={e => setSiteControls({ ...siteControls, ad1week: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                      <div><label className="text-[10px] text-gray-500">1 Month</label><input type="number" min="0" value={siteControls.ad1month} onChange={e => setSiteControls({ ...siteControls, ad1month: e.target.value })} className="w-full border rounded-xl px-3 py-2 text-sm" /></div>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1">Advertisers pick 1 Day / 1 Week / 1 Month on the user site and pay you the matching amount. Currently ₦{Number(siteControls.ad1day).toLocaleString()} / ₦{Number(siteControls.ad1week).toLocaleString()} / ₦{Number(siteControls.ad1month).toLocaleString()}.</p>
                   </div>
                   <div className="border-t pt-3 text-xs font-bold text-gray-500">Homepage stats override (empty = real numbers)</div>
                   <div className="grid grid-cols-2 gap-3">
