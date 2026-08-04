@@ -643,3 +643,23 @@ CREATE POLICY "support_threads_all" ON public.support_threads FOR ALL USING (tru
 DROP POLICY IF EXISTS "support_messages_all" ON public.support_messages;
 CREATE POLICY "support_messages_all" ON public.support_messages FOR ALL USING (true) WITH CHECK (true);
 NOTIFY pgrst, 'reload schema';
+
+-- =========================
+-- v3.8 — Follower notifications name the follower + deep-link highlight
+-- Convention (NO schema change needed): new_follower messages end with a hidden
+-- token "[[FOL:<email>]]" — the app strips it for display and uses it to open
+-- /profile?followers=1&hl=<email> → the followers list opens with that person
+-- scrolled into view & highlighted. Backfill below tags old notifications where
+-- the user has EXACTLY ONE follower (100% unambiguous). Safe to re-run.
+-- =========================
+WITH single AS (
+  SELECT lower(following_email) AS fe_email, min(lower(follower_email)) AS follower
+  FROM public.follows GROUP BY lower(following_email) HAVING count(*) = 1
+)
+UPDATE public.notifications n
+SET message = '➕ ' || coalesce(nullif(trim((SELECT u.name FROM public.users u WHERE lower(u.email) = s.follower)), ''), 'Someone')
+  || ' started following you on PayRound — tap to see them in your followers list.'
+  || '[[FOL:' || s.follower || ']]'
+FROM single s
+WHERE n.type = 'new_follower' AND lower(n.user_email) = s.fe_email AND n.message NOT LIKE '%[[FOL:%';
+NOTIFY pgrst, 'reload schema';
