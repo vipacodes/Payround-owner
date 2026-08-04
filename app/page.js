@@ -1002,7 +1002,18 @@ export default function OwnerPanel() {
           </div>
           <div className="flex items-center gap-2 md:gap-3 shrink-0">
             <span className="hidden md:block text-xs border rounded-lg px-3 py-1">{currentWeekRange()}</span>
-            <span className="text-[10px] md:text-xs bg-green-50 text-green-700 border px-2 md:px-3 py-1 rounded-full truncate max-w-[120px] md:max-w-none">{usersList.length} users • {user.email.split('@')[0]}</span>
+            {/* 💬 Support chat shortcut (replaces the old "users • name" chip) — one tap opens Support Chats; green dot = a user is waiting for a reply */}
+            <button
+              onClick={() => handleMenuClick('support')}
+              aria-label="Open support chats"
+              title={supportThreads.some(t => !t.owner_read) ? 'Support chats — NEW messages waiting 💬' : 'Support chats'}
+              className="relative w-11 h-11 shrink-0 bg-[#1a1b3a] text-white rounded-xl flex items-center justify-center text-xl hover:bg-[#252653] transition-colors"
+            >
+              💬
+              {supportThreads.some(t => !t.owner_read) && (
+                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full animate-pulse" />
+              )}
+            </button>
           </div>
         </div>
 
@@ -1510,7 +1521,7 @@ export default function OwnerPanel() {
                 </button>
               </div>
               <p className="text-xs text-gray-500 mb-4">
-                Users tap the pinned <b>PayRound Support</b> chat on the user site. While you are <b>OFFLINE</b>, the chatbot 🤖 <b>Ada</b> answers instantly and urges them to chat you on WhatsApp for faster replies. Switch yourself ONLINE when you're around to reply personally — the bot then stays quiet.
+                Users tap the pinned <b>PayRound Support</b> chat on the user site. While you are <b>OFFLINE</b>, the 🤖 <b>PayRound Chat Bot</b> answers instantly and urges them to chat you on WhatsApp for faster replies. Switch yourself ONLINE when you're around to reply personally — the bot then stays quiet.
               </p>
               {!activeSupport ? (
                 supportThreads.length === 0 ? (
