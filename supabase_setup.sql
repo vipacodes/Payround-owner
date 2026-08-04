@@ -606,3 +606,40 @@ CREATE POLICY "group_reviews_update_all" ON public.group_reviews FOR UPDATE USIN
 DROP POLICY IF EXISTS "member_reviews_update_all" ON public.member_reviews;
 CREATE POLICY "member_reviews_update_all" ON public.member_reviews FOR UPDATE USING (true) WITH CHECK (true);
 NOTIFY pgrst, 'reload schema';
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- v3.7  AD ALT TEXT + REJECTION REASONS + SUPPORT CHAT (bot answers when offline)
+-- advertisers can attach optional alt text per media; owner must give a reason
+-- when declining an ad; advertisers edit & resubmit rejected ads.
+-- support_threads/support_messages power the PayRound Support chat:
+-- owner replies from the owner panel; when owner_settings.is_online = false the
+-- user site posts an instant chatbot reply (with WhatsApp nudge).
+-- ═══════════════════════════════════════════════════════════════════════════════
+ALTER TABLE public.ads ADD COLUMN IF NOT EXISTS reject_reason text;
+ALTER TABLE public.ads ADD COLUMN IF NOT EXISTS media_alts text;
+ALTER TABLE public.owner_settings ADD COLUMN IF NOT EXISTS is_online boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS public.support_threads (
+  id text PRIMARY KEY,
+  user_email text NOT NULL,
+  user_name text,
+  last_message text,
+  last_at timestamptz DEFAULT now(),
+  user_read boolean NOT NULL DEFAULT true,
+  owner_read boolean NOT NULL DEFAULT false
+);
+CREATE TABLE IF NOT EXISTS public.support_messages (
+  id text PRIMARY KEY,
+  thread_id text NOT NULL REFERENCES public.support_threads(id) ON DELETE CASCADE,
+  sender_type text NOT NULL,
+  body text NOT NULL,
+  read boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.support_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.support_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "support_threads_all" ON public.support_threads;
+CREATE POLICY "support_threads_all" ON public.support_threads FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "support_messages_all" ON public.support_messages;
+CREATE POLICY "support_messages_all" ON public.support_messages FOR ALL USING (true) WITH CHECK (true);
+NOTIFY pgrst, 'reload schema';

@@ -229,6 +229,7 @@ const MENU = [
   { id: 'verification', icon: '✅', label: 'Verification' },
   { id: 'photo_requests', icon: '📷', label: 'Photo Requests' },
   { id: 'transactions', icon: '💳', label: 'Transactions' },
+  { id: 'support', icon: '💬', label: 'Support Chats' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
   { id: 'referral', icon: '🎁', label: 'Referral Bonus' },
   { id: 'settings', icon: '⚙️', label: 'Settings' },
@@ -287,6 +288,13 @@ export default function OwnerPanel() {
   const [payoutsAll, setPayoutsAll] = useState([]);     // collected payouts → Payouts chart
   const [growthPeriod, setGrowthPeriod] = useState('month');
   const [moneyPeriod, setMoneyPeriod] = useState('month');
+  // 💬 Support chats with users (+ the bot holds the fort while you're offline)
+  const [supportThreads, setSupportThreads] = useState([]);
+  const [activeSupport, setActiveSupport] = useState(null);
+  const [supportMsgs, setSupportMsgs] = useState([]);
+  const [supReply, setSupReply] = useState('');
+  const [supBusy, setSupBusy] = useState(false);
+  const [ownerIsOnline, setOwnerIsOnline] = useState(false);
 
   const handleMenuClick = (menu) => {
     setActiveMenu(menu);
@@ -305,6 +313,7 @@ export default function OwnerPanel() {
           if (s.owner_password_hash) setPwHash(s.owner_password_hash);
           if (s.announcement_text) setAnnouncementText(s.announcement_text);
           if (s.announcement_media_url) setAnnouncementMedia(s.announcement_media_url);
+          setOwnerIsOnline(!!s.is_online);
           setSiteControls({
             plan1m: s.plan_1m ?? DEFAULT_OWNER_SETTINGS.plan_1m,
             plan6m: s.plan_6m ?? DEFAULT_OWNER_SETTINGS.plan_6m,
@@ -332,13 +341,14 @@ export default function OwnerPanel() {
         usersList.filter(u => !(u.is_approved === true || u.approval_status === 'approved')).length +
         verifyRequests.filter(r => r.status === 'pending').length +
         photoPendingUsers.length +
-        editRequests.filter(r => r.status === 'pending').length;
+        editRequests.filter(r => r.status === 'pending').length +
+        supportThreads.filter(t => !t.owner_read).length;
       if ('setAppBadge' in navigator) {
         if (total > 0) navigator.setAppBadge(total).catch(() => {});
         else if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
       }
     } catch {}
-  }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests]);
+  }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests, supportThreads]);
 
   const loadData = async () => {
     const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
@@ -369,6 +379,7 @@ export default function OwnerPanel() {
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
     setAds(await safe(supabase.from('ads').select('*')));
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
+    setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
     // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
     setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false })));
     setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false })));
@@ -696,11 +707,20 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
-  // Approve/decline submitted ads — approving starts the paid clock: live for the purchased number of days
+  // Approve/decline submitted ads — approving starts the paid clock: live for the purchased number of days.
+  // Declining (or taking down) REQUIRES a reason — the advertiser sees it and can edit & resubmit.
   const reviewAd = async (ad, approve) => {
     setBusy(true);
     try {
-      const patch = { status: approve ? 'approved' : 'declined' };
+      let rejectReason = null;
+      if (!approve) {
+        const r = window.prompt(`Why is "${ad.business_name || 'this ad'}" being declined/taken down?\n\nThe advertiser sees this exact text (required):`, '');
+        if (r === null) { setBusy(false); return; }
+        rejectReason = r.trim();
+        if (!rejectReason) { setErr('A reason is required when declining an ad — the advertiser uses it to fix and resubmit.'); setBusy(false); return; }
+        if (!window.confirm(`Decline "${ad.business_name}" with reason:\n\n"${rejectReason}"\n\nProceed?`)) { setBusy(false); return; }
+      }
+      const patch = { status: approve ? 'approved' : 'declined', reject_reason: rejectReason };
       if (approve) {
         const days = Number(ad.duration_days) || 7;
         const now = Date.now();
@@ -712,13 +732,67 @@ export default function OwnerPanel() {
       try {
         await notify('ad_review', null, approve
           ? `📢 Your ad "${ad.business_name || 'Business'}" is now LIVE on PayRound for ${Number(ad.duration_days) || 7} day(s) — shown to visitors and on every user dashboard. 🎉`
-          : `Your ad "${ad.business_name || 'Business'}" was not approved this time. You can submit an improved ad anytime.`,
+          : `Your ad "${ad.business_name || 'Business'}" was declined. Reason: "${rejectReason}". Open the Advertise page → My Ads to read it, edit your ad and resubmit. ✏️`,
           (ad.submitter_email || '').toLowerCase() || null);
       } catch {}
       setMsg(approve ? `Ad "${ad.business_name}" approved — LIVE now for ${Number(ad.duration_days) || 7} day(s), then it comes down automatically.` : `Ad "${ad.business_name}" declined — the submitter has been notified.`);
       loadData();
     } catch (e) { setErr(`Ad review failed: ${e.message}`); }
     setBusy(false);
+  };
+
+  // 💬 Support inbox — presence toggle + thread handling
+  const toggleOnline = async () => {
+    const nv = !ownerIsOnline;
+    setOwnerIsOnline(nv);
+    try {
+      const { error } = await supabase.from('owner_settings').update({ is_online: nv, updated_at: new Date().toISOString() }).eq('id', 1);
+      if (error) throw error;
+      setMsg(nv ? '🟢 You are ONLINE — users now chat with you directly (the bot stays quiet).' : '💤 Offline mode — the chatbot 🤖 answers users instantly and points them to WhatsApp.');
+    } catch (e) { setErr(`Could not update presence: ${e.message}`); setOwnerIsOnline(!nv); }
+  };
+
+  const openSupportThread = async (th) => {
+    setActiveSupport(th);
+    setSupportMsgs([]);
+    try {
+      await supabase.from('support_threads').update({ owner_read: true }).eq('id', th.id);
+      setSupportThreads(prev => prev.map(x => x.id === th.id ? { ...x, owner_read: true } : x));
+    } catch {}
+  };
+
+  // live-messages poll while a thread is open
+  useEffect(() => {
+    if (!activeSupport) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        const { data } = await supabase.from('support_messages').select('*').eq('thread_id', activeSupport.id).order('created_at');
+        if (alive) setSupportMsgs(data || []);
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 4000);
+    return () => { alive = false; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSupport?.id]);
+
+  const sendSupportReply = async () => {
+    const text = supReply.trim();
+    if (!text || !activeSupport || supBusy) return;
+    setSupBusy(false); setSupBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const row = { id: `sm-${Date.now()}-own`, thread_id: activeSupport.id, sender_type: 'owner', body: text, read: false };
+      const { error } = await supabase.from('support_messages').insert(row);
+      if (error) throw error;
+      await supabase.from('support_threads').update({ last_message: text, last_at: now, user_read: false, owner_read: true }).eq('id', activeSupport.id);
+      setSupportMsgs(prev => [...prev, { ...row, created_at: now }]);
+      setSupReply('');
+      try { await notify('support_reply', null, `💬 PayRound Support replied: "${text.slice(0, 120)}${text.length > 120 ? '…' : ''}" — open Messages → PayRound Support to read & reply.`, (activeSupport.user_email || '').toLowerCase() || null); } catch {}
+      setMsg(`Reply sent to ${activeSupport.user_name || activeSupport.user_email}.`);
+    } catch (e) { setErr(`Reply failed: ${e.message}`); }
+    setSupBusy(false);
   };
 
   const clearAnnouncement = async () => {
@@ -1426,6 +1500,71 @@ export default function OwnerPanel() {
             </div>
           )}
 
+          {/* 💬 SUPPORT CHATS — users message you here; the bot replies whenever you're offline */}
+          {activeMenu === 'support' && (
+            <div className="bg-white rounded-xl border p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+                <h3 className="font-bold">💬 Support Chats {supportThreads.filter(t => !t.owner_read).length > 0 && <span className="text-[10px] bg-red-500 text-white px-2 py-0.5 rounded-full align-middle">{supportThreads.filter(t => !t.owner_read).length} new</span>}</h3>
+                <button disabled={busy} onClick={toggleOnline} className={`text-xs font-bold px-4 py-2 rounded-full border transition-colors disabled:opacity-60 ${ownerIsOnline ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                  {ownerIsOnline ? '🟢 You are ONLINE (tap to go offline)' : '💤 You are OFFLINE (tap to go online)'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                Users tap the pinned <b>PayRound Support</b> chat on the user site. While you are <b>OFFLINE</b>, the chatbot 🤖 <b>Ada</b> answers instantly and urges them to chat you on WhatsApp for faster replies. Switch yourself ONLINE when you're around to reply personally — the bot then stays quiet.
+              </p>
+              {!activeSupport ? (
+                supportThreads.length === 0 ? (
+                  <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No support chats yet. They appear here the moment a user messages PayRound Support from the user site.</div>
+                ) : (
+                  <div className="divide-y border rounded-xl overflow-hidden">
+                    {supportThreads.map(t => (
+                      <button key={t.id} onClick={() => openSupportThread(t)} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left transition-colors">
+                        <span className="w-10 h-10 rounded-full bg-gray-900 text-white font-bold flex items-center justify-center text-sm shrink-0">{(t.user_name || t.user_email || 'U').charAt(0).toUpperCase()}</span>
+                        <span className="flex-1 min-w-0">
+                          <span className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                            <span className="truncate">{t.user_name || t.user_email}</span>
+                            {!t.owner_read && <span className="text-[10px] bg-red-500 text-white px-1.5 py-0.5 rounded-full shrink-0">NEW</span>}
+                            <span className="ml-auto text-[10px] font-normal text-gray-400 shrink-0">{t.last_at ? new Date(t.last_at).toLocaleString() : ''}</span>
+                          </span>
+                          <span className="block text-xs text-gray-500 truncate">{t.last_message || '—'}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : (
+                <div className="border rounded-xl overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-gray-50">
+                    <button onClick={() => { setActiveSupport(null); setSupportMsgs([]); loadData(); }} className="text-xs font-bold text-gray-600 border border-gray-200 bg-white px-3 py-1 rounded-full">← All chats</button>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-gray-900 truncate">{activeSupport.user_name || activeSupport.user_email}</p>
+                      <p className="text-[10px] text-gray-400 truncate">{activeSupport.user_email}</p>
+                    </div>
+                  </div>
+                  <div className="max-h-96 overflow-y-auto px-4 py-3 space-y-2 bg-gray-50/50">
+                    {supportMsgs.map(m => {
+                      const ownerMsg = m.sender_type === 'owner';
+                      const botMsg = m.sender_type === 'bot';
+                      return (
+                        <div key={m.id} className={`flex ${ownerMsg || botMsg ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm ${ownerMsg ? 'bg-black text-white rounded-br-md' : botMsg ? 'bg-amber-50 border border-amber-300 text-amber-900 rounded-br-md' : 'bg-white border text-gray-900 rounded-bl-md'}`}>
+                            {botMsg && <p className="text-[9px] font-bold text-amber-600 mb-0.5">🤖 AUTO-REPLY (bot answered because you were offline)</p>}
+                            <p className="whitespace-pre-line break-words">{m.body}</p>
+                            <p className={`text-[9px] mt-0.5 ${ownerMsg ? 'text-gray-400 text-right' : 'text-gray-400'}`}>{m.created_at ? new Date(m.created_at).toLocaleTimeString() : ''}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-3 border-t">
+                    <input value={supReply} onChange={e => setSupReply(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); sendSupportReply(); } }} placeholder="Reply to this user… (they get a notification)" maxLength={1000} className="flex-1 px-4 py-2.5 border rounded-full text-sm" />
+                    <button disabled={supBusy || !supReply.trim()} onClick={sendSupportReply} className="bg-black text-white text-xs font-bold px-5 py-2.5 rounded-full disabled:opacity-50">{supBusy ? '…' : 'Send'}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 7. BANK DETAILS */}
           {activeMenu === 'bank' && (
             <div className="bg-white rounded-xl border p-6 max-w-xl">
@@ -1684,9 +1823,9 @@ export default function OwnerPanel() {
         {!isPending && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-xs text-gray-500">Tier badge (shows as a colored check mark):</span>
-            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'bronze')} className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥉 Bronze — Tier 1</button>
-            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'silver')} className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥈 Silver — Tier 2</button>
-            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'gold')} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60">🥇 Gold — Tier 3</button>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'bronze')} className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60 tier-btn-emboss">🥉 Bronze — Tier 1</button>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'silver')} className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60 tier-btn-emboss">🥈 Silver — Tier 2</button>
+            <button disabled={busy} onClick={() => verifyGroupBadge(g, 'gold')} className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-full text-xs disabled:opacity-60 tier-btn-emboss">🥇 Gold — Tier 3</button>
           </div>
         )}
 
