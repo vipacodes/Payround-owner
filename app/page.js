@@ -294,6 +294,10 @@ export default function OwnerPanel() {
   const [supportMsgs, setSupportMsgs] = useState([]);
   const [supReply, setSupReply] = useState('');
   const [supBusy, setSupBusy] = useState(false);
+  // 👤 user profile shown WHILE chatting (peek card + full profile button)
+  const [supProfile, setSupProfile] = useState(null);
+  const [supProfileLoading, setSupProfileLoading] = useState(false);
+  const [showSupProfile, setShowSupProfile] = useState(true);
   const [ownerIsOnline, setOwnerIsOnline] = useState(false);
 
   const handleMenuClick = (menu) => {
@@ -755,10 +759,42 @@ export default function OwnerPanel() {
   const openSupportThread = async (th) => {
     setActiveSupport(th);
     setSupportMsgs([]);
+    setSupProfile(null); setSupProfileLoading(true); setShowSupProfile(true);
     try {
       await supabase.from('support_threads').update({ owner_read: true }).eq('id', th.id);
       setSupportThreads(prev => prev.map(x => x.id === th.id ? { ...x, owner_read: true } : x));
     } catch {}
+    // 👤 load this chatter's profile so you can see WHO you're helping, mid-chat
+    try {
+      const em = (th.user_email || '').toLowerCase();
+      const { data: urow } = await supabase.from('users').select('*').ilike('email', em).maybeSingle();
+      let memberOf = 0, adminOf = 0;
+      try {
+        const { count: mc } = await supabase.from('members').select('id', { count: 'exact', head: true }).eq('member_email', em).eq('status', 'approved');
+        memberOf = mc || 0;
+      } catch {}
+      try {
+        const { count: ac } = await supabase.from('groups').select('id', { count: 'exact', head: true }).eq('admin_email', em);
+        adminOf = ac || 0;
+      } catch {}
+      setSupProfile({ user: urow || null, memberOf, adminOf });
+    } catch { setSupProfile({ user: null, memberOf: 0, adminOf: 0 }); }
+    setSupProfileLoading(false);
+  };
+
+  // open the FULL profile modal (same one as the Users tab) for the user you're chatting with
+  const viewSupportProfileFull = async () => {
+    if (!activeSupport) return;
+    if (supProfile?.user) { openUserProfile(supProfile.user); return; }
+    const em = (activeSupport.user_email || '').toLowerCase();
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { data, error } = await supabase.from('users').select('*').ilike('email', em).maybeSingle();
+      if (error) throw error;
+      if (data) openUserProfile(data);
+      else setErr('No registered account profile found for this email yet.');
+    } catch (e) { setErr(`Could not load profile: ${e.message}`); }
+    setBusy(false);
   };
 
   // live-messages poll while a thread is open
@@ -1546,12 +1582,47 @@ export default function OwnerPanel() {
               ) : (
                 <div className="border rounded-xl overflow-hidden">
                   <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-gray-50">
-                    <button onClick={() => { setActiveSupport(null); setSupportMsgs([]); loadData(); }} className="text-xs font-bold text-gray-600 border border-gray-200 bg-white px-3 py-1 rounded-full">← All chats</button>
+                    <button onClick={() => { setActiveSupport(null); setSupportMsgs([]); setSupProfile(null); loadData(); }} className="text-xs font-bold text-gray-600 border border-gray-200 bg-white px-3 py-1 rounded-full">← All chats</button>
                     <div className="min-w-0">
                       <p className="text-sm font-bold text-gray-900 truncate">{activeSupport.user_name || activeSupport.user_email}</p>
                       <p className="text-[10px] text-gray-400 truncate">{activeSupport.user_email}</p>
                     </div>
+                    <button disabled={busy} onClick={viewSupportProfileFull} className="ml-auto text-[11px] font-bold border border-gray-300 bg-white px-3 py-1.5 rounded-full hover:bg-gray-100 shrink-0 disabled:opacity-60">👁 Full Profile</button>
                   </div>
+
+                  {/* 👤 PROFILE PEEK — who you're chatting with, visible the whole time */}
+                  {(supProfileLoading || supProfile) && (
+                    <div className="border-b bg-emerald-50/50 px-4 py-2.5">
+                      {supProfileLoading ? (
+                        <p className="text-[11px] text-gray-400 animate-pulse font-semibold">Loading this user's profile…</p>
+                      ) : !supProfile?.user ? (
+                        <p className="text-[11px] text-amber-700 font-semibold">⚠️ No registered account found for <b>{activeSupport.user_email}</b> — maybe they typed a different email. You can still reply normally.</p>
+                      ) : (
+                        <>
+                          <button onClick={() => setShowSupProfile(v => !v)} className="w-full flex items-center gap-2 text-left">
+                            <span className="text-[11px] font-bold text-emerald-900">👤 Chatting with — user profile</span>
+                            <span className="ml-auto text-[10px] text-gray-400 font-semibold">{showSupProfile ? 'hide ▲' : 'show ▼'}</span>
+                          </button>
+                          {showSupProfile && (() => { const u = supProfile.user; return (
+                            <div className="mt-2 flex items-start gap-3">
+                              {u.profile_pic ? (
+                                <img src={u.profile_pic} alt="" onClick={() => setZoomImg(u.profile_pic)} className="w-12 h-12 rounded-full object-cover border cursor-zoom-in shrink-0" />
+                              ) : (
+                                <span className="w-12 h-12 rounded-full bg-gray-900 text-white font-bold flex items-center justify-center text-sm shrink-0">{(u.name || u.email || 'U').charAt(0).toUpperCase()}</span>
+                              )}
+                              <div className="flex-1 min-w-0 text-[11px] text-gray-600 space-y-0.5">
+                                <p className="font-bold text-gray-900 text-xs flex items-center gap-1 flex-wrap">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.is_frozen && <span className="text-[9px] bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded-full font-bold">🧊 frozen</span>}</p>
+                                <p className="truncate">📧 {u.email}{u.phone ? ` · 📞 ${u.phone}` : ' · 📞 —'}</p>
+                                <p>🗓 Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'} · 👥 member of {supProfile.memberOf} group{supProfile.memberOf === 1 ? '' : 's'}{supProfile.adminOf > 0 ? ` · 👑 admin of ${supProfile.adminOf}` : ''}</p>
+                                {u.bank_name && <p className="truncate">🏦 {u.bank_name} · {u.account_number || '—'} · {u.account_name || '—'}</p>}
+                                <p className="text-gray-400">✔ approved: {(u.is_approved || u.approval_status === 'approved') ? 'yes' : 'no'} · 🎁 referral earnings: ₦{Number(u.referral_earnings || 0).toLocaleString()}{u.occupation ? ` · 💼 ${u.occupation}` : ''}</p>
+                              </div>
+                            </div>
+                          ); })()}
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div className="max-h-96 overflow-y-auto px-4 py-3 space-y-2 bg-gray-50/50">
                     {supportMsgs.map(m => {
                       const ownerMsg = m.sender_type === 'owner';
