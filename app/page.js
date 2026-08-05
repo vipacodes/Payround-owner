@@ -14,12 +14,15 @@ function adsMediaOf(a) {
 const fmtODay = (iso) => { try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; }; };
 const fmtODayShort = (d) => { try { return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch { return d; }; };
 
-// 📊 raw ad_events rows → rich stats (totals, unique accounts, per-media, per-day, tap-through)
+// 📊 raw ad_events rows → rich stats (totals, PEOPLE = accounts + guest devices, per-media, per-day, tap-through)
+// Legacy rows have viewer=null; new rows always carry account email or 'g:<device-id>' for guests.
 function aggAdEvents(rows) {
   const views = (rows || []).filter(r => r.kind === 'view');
   const clicks = (rows || []).filter(r => r.kind === 'click');
-  const uniq = (rs) => new Set(rs.map(r => r.viewer).filter(Boolean)).size;
-  const guests = (rs) => rs.filter(r => !r.viewer).length;
+  const people = (rs) => new Set(rs.map(r => r.viewer).filter(Boolean));
+  const accounts = (rs) => new Set(rs.map(r => r.viewer).filter(v => v && !v.startsWith('g:')));
+  const guestDevices = (rs) => new Set(rs.map(r => r.viewer).filter(v => v && v.startsWith('g:')));
+  const legacyGuests = (rs) => rs.filter(r => !r.viewer).length;
   const byMedia = new Map();
   for (const v of views) {
     const k = v.media_index === null || v.media_index === undefined ? 0 : Number(v.media_index) || 0;
@@ -34,14 +37,20 @@ function aggAdEvents(rows) {
     if (!d) continue;
     byDay.set(d, (byDay.get(d) || 0) + 1);
   }
-  const uniqueAccounts = uniq(views);
-  const uniqueClickers = uniq(clicks);
+  const peopleReached = people(views).size;
+  const uniqueClickers = people(clicks).size;
   return {
-    totalViews: views.length, uniqueAccounts, guestViews: guests(views),
-    totalClicks: clicks.length, uniqueClickers,
-    tapRate: uniqueAccounts > 0 ? Math.round((uniqueClickers / uniqueAccounts) * 100) : 0,
+    totalViews: views.length,
+    peopleReached,
+    accountsReached: accounts(views).size,
+    guestDevices: guestDevices(views).size,
+    legacyGuests: legacyGuests(views),
+    totalClicks: clicks.length,
+    uniqueClickers,
+    legacyClickGuests: legacyGuests(clicks),
+    tapRate: peopleReached > 0 ? Math.round((uniqueClickers / peopleReached) * 100) : 0,
     perMedia: [...byMedia.entries()].sort((a, b) => a[0] - b[0])
-      .map(([idx, b]) => ({ idx, views: b.views, accounts: b.viewers.size, guests: b.guests })),
+      .map(([idx, b]) => ({ idx, views: b.views, people: b.viewers.size, guests: b.guests })),
     perDay: [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
   };
 }
@@ -131,7 +140,6 @@ function OwnerAdStats({ ad, onClose }) {
     return () => { alive = false; };
   }, [ad?.id]);
   const media = adsMediaOf(ad);
-  const maxPerMedia = state === 'ok' ? Math.max(1, ...stats.perMedia.map(m => m.views)) : 1;
   const maxPerDay = state === 'ok' ? Math.max(1, ...stats.perDay.map(d => d[1])) : 1;
   const bestDay = state === 'ok' && stats.perDay.length ? stats.perDay.reduce((a, b) => (b[1] > a[1] ? b : a)) : null;
   const expired = ad?.expires_at && new Date(ad.expires_at).getTime() < Date.now();
@@ -176,21 +184,23 @@ function OwnerAdStats({ ad, onClose }) {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-2xl p-3.5" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
                   <p className="text-xl mb-0.5">👥</p>
-                  <p className="text-2xl font-black leading-none" style={{ color: '#047857' }}>{stats.uniqueAccounts.toLocaleString()}</p>
-                  <p className="text-[10px] font-bold mt-1" style={{ color: '#065f46' }}>ACCOUNTS REACHED</p>
-                  <p className="text-[10px]" style={{ color: '#047857' }}>different PayRound accounts saw this ad</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#047857' }}>{(stats.peopleReached + stats.legacyGuests).toLocaleString()}</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#065f46' }}>PEOPLE REACHED</p>
+                  <p className="text-[10px]" style={{ color: '#047857' }}>
+                    {stats.accountsReached > 0 ? `${stats.accountsReached} account${stats.accountsReached === 1 ? '' : 's'}` : 'no logged-in accounts yet'}{(stats.guestDevices + stats.legacyGuests) > 0 ? ` · ${stats.guestDevices + stats.legacyGuests} guest${(stats.guestDevices + stats.legacyGuests) === 1 ? '' : 's'}` : ''}
+                  </p>
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
                   <p className="text-xl mb-0.5">👀</p>
                   <p className="text-2xl font-black leading-none" style={{ color: '#1d4ed8' }}>{stats.totalViews.toLocaleString()}</p>
                   <p className="text-[10px] font-bold mt-1" style={{ color: '#1e40af' }}>TOTAL VIEWS</p>
-                  <p className="text-[10px]" style={{ color: '#1d4ed8' }}>every on-screen appearance{stats.guestViews ? ` (+${stats.guestViews} guest views)` : ''}</p>
+                  <p className="text-[10px]" style={{ color: '#1d4ed8' }}>every on-screen appearance (each photo/video counts separately)</p>
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#fffbeb', border: '1px solid #fde68a' }}>
                   <p className="text-xl mb-0.5">👆</p>
-                  <p className="text-2xl font-black leading-none" style={{ color: '#b45309' }}>{stats.uniqueClickers.toLocaleString()}</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#b45309' }}>{(stats.uniqueClickers + stats.legacyClickGuests).toLocaleString()}</p>
                   <p className="text-[10px] font-bold mt-1" style={{ color: '#92400e' }}>OPENED THE PAGE</p>
-                  <p className="text-[10px]" style={{ color: '#b45309' }}>accounts that tapped through to the business</p>
+                  <p className="text-[10px]" style={{ color: '#b45309' }}>people who tapped through to the business</p>
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
                   <p className="text-xl mb-0.5">⚡</p>
@@ -218,10 +228,10 @@ function OwnerAdStats({ ad, onClose }) {
                           <div className="flex-1 min-w-0">
                             <p className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{isVid ? 'Video' : 'Photo'} {m.idx + 1}</p>
                             <div className="mt-1 h-2 rounded-full overflow-hidden" style={{ background: '#e2e8f0' }}>
-                              <div className="h-full rounded-full" style={{ width: `${Math.max(4, Math.round((m.views / maxPerMedia) * 100))}%`, background: 'linear-gradient(90deg,#94a3b8,#0f172a)' }} />
+                              <div className="h-full rounded-full" style={{ width: `${Math.max(4, Math.round((m.views / Math.max(1, stats.totalViews)) * 100))}%`, background: 'linear-gradient(90deg,#94a3b8,#0f172a)' }} />
                             </div>
                             <p className="text-[10px] mt-1 font-semibold" style={{ color: '#334155' }}>
-                              {m.views.toLocaleString()} view{m.views === 1 ? '' : 's'} · {m.accounts.toLocaleString()} account{m.accounts === 1 ? '' : 's'}{m.guests ? ` · +${m.guests} guest` : ''}
+                              {m.views.toLocaleString()} view{m.views === 1 ? '' : 's'} · {m.people.toLocaleString()} {m.people === 1 ? 'person' : 'people'}{m.guests ? ` · +${m.guests} guest view${m.guests === 1 ? '' : 's'}` : ''}
                             </p>
                           </div>
                         </div>
@@ -938,6 +948,7 @@ export default function OwnerPanel() {
   const saveSiteControls = async () => {
     setBusy(true); setErr('');
     const num = (v) => (v === '' || v === null ? null : Number(v));
+    const txt = (v) => { const s = String(v ?? '').trim(); return s === '' ? null : s; }; // stats keep what you type — "+" and "%" allowed
     try {
       const { error } = await supabase.from('owner_settings').update({
         plan_1m: Number(siteControls.plan1m) || DEFAULT_OWNER_SETTINGS.plan_1m,
@@ -946,8 +957,8 @@ export default function OwnerPanel() {
         ad_1day: Number(siteControls.ad1day) || 500,
         ad_1week: Number(siteControls.ad1week) || 3325,
         ad_1month: Number(siteControls.ad1month) || 13500,
-        stats_users_override: num(siteControls.statsUsers), stats_groups_override: num(siteControls.statsGroups),
-        stats_saved_override: num(siteControls.statsSaved), stats_satisfaction_override: num(siteControls.statsSatisfaction),
+        stats_users_override: txt(siteControls.statsUsers), stats_groups_override: txt(siteControls.statsGroups),
+        stats_saved_override: txt(siteControls.statsSaved), stats_satisfaction_override: txt(siteControls.statsSatisfaction),
         updated_at: new Date().toISOString(),
       }).eq('id', 1);
       if (error) throw error;
@@ -2150,11 +2161,12 @@ export default function OwnerPanel() {
                   </div>
                   <div className="border-t pt-3 text-xs font-bold text-gray-500">Homepage stats override (empty = real numbers)</div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="text-xs">Registered Users</label><input type="number" value={siteControls.statsUsers} onChange={e => setSiteControls({ ...siteControls, statsUsers: e.target.value })} placeholder={String(usersList.length)} className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
-                    <div><label className="text-xs">Active Groups</label><input type="number" value={siteControls.statsGroups} onChange={e => setSiteControls({ ...siteControls, statsGroups: e.target.value })} placeholder={String(activeGroups.length)} className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
-                    <div><label className="text-xs">Saved Through Platform (₦)</label><input type="number" value={siteControls.statsSaved} onChange={e => setSiteControls({ ...siteControls, statsSaved: e.target.value })} placeholder="auto" className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
-                    <div><label className="text-xs">Member Satisfaction (%)</label><input type="number" min="0" max="100" value={siteControls.statsSatisfaction} onChange={e => setSiteControls({ ...siteControls, statsSatisfaction: e.target.value })} placeholder="auto" className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
+                    <div><label className="text-xs">Registered Users</label><input type="text" inputMode="text" value={siteControls.statsUsers} onChange={e => setSiteControls({ ...siteControls, statsUsers: e.target.value })} placeholder={String(usersList.length)} className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
+                    <div><label className="text-xs">Active Groups</label><input type="text" inputMode="text" value={siteControls.statsGroups} onChange={e => setSiteControls({ ...siteControls, statsGroups: e.target.value })} placeholder={String(activeGroups.length)} className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
+                    <div><label className="text-xs">Saved Through Platform (₦)</label><input type="text" inputMode="text" value={siteControls.statsSaved} onChange={e => setSiteControls({ ...siteControls, statsSaved: e.target.value })} placeholder="auto" className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
+                    <div><label className="text-xs">Member Satisfaction (%)</label><input type="text" inputMode="text" value={siteControls.statsSatisfaction} onChange={e => setSiteControls({ ...siteControls, statsSatisfaction: e.target.value })} placeholder="auto" className="w-full border rounded-xl px-3 py-2 text-sm mt-1" /></div>
                   </div>
+                  <p className="text-[11px] text-gray-400 mt-1.5">💡 Type exactly how it should appear — <b>+</b> and <b>%</b> are allowed: e.g. <b>500+</b>, <b>₦2.5M+</b>, <b>98%</b>. Leave a box empty to use the real automatic number.</p>
                   <button disabled={busy} onClick={saveSiteControls} className="w-full bg-purple-700 hover:bg-purple-800 text-white py-2 rounded-xl text-sm font-bold disabled:opacity-60">{busy ? 'Saving…' : 'Save Site Controls'}</button>
                 </div>
               </div>

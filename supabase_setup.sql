@@ -733,3 +733,16 @@ create policy "Public insert business_reviews" on public.business_reviews for in
 create policy "Public read business_reviews"   on public.business_reviews for select to anon, authenticated using (true);
 create policy "Public update business_reviews" on public.business_reviews for update to anon, authenticated using (true) with check (true);
 -- (applied live via the Management API on 5 Aug 2026)
+
+-- =========================
+-- v4.2 — HOMEPAGE STATS WITH + / % SUFFIXES (5 Aug 2026)
+-- The 4 homepage stat overrides are now TEXT so values like 500+, ₦2.5M+, 98% display
+-- exactly as typed in the owner panel's User Site Controls (empty = automatic real value).
+-- (ad analytics: logged-out viewers are counted as distinct PEOPLE per device — 'g:<id>' —
+--  no schema change needed; viewer column already text.)
+-- =========================
+alter table public.owner_settings alter column stats_users_override type text using stats_users_override::text;
+alter table public.owner_settings alter column stats_groups_override type text using stats_groups_override::text;
+alter table public.owner_settings alter column stats_saved_override type text using stats_saved_override::text;
+alter table public.owner_settings alter column stats_satisfaction_override type text using stats_satisfaction_override::text;
+-- (applied live via the Management API on 5 Aug 2026 — existing numbers were preserved as text)
