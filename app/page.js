@@ -228,6 +228,7 @@ const MENU = [
   { id: 'users', icon: '👤', label: 'Users' },
   { id: 'verification', icon: '✅', label: 'Verification' },
   { id: 'photo_requests', icon: '📷', label: 'Photo Requests' },
+  { id: 'ads', icon: '📣', label: 'Ads' },
   { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'support', icon: '💬', label: 'Support Chats' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
@@ -891,6 +892,7 @@ export default function OwnerPanel() {
   const isUserDeclined = (u) => u.approval_status === 'declined';
   const activeUsers = usersList.filter(isUserApproved);
   const pendingUsers = usersList.filter(u => !isUserApproved(u));
+  const pendingAdsCount = ads.filter(a => a.status === 'pending').length;
   // Owner search helpers — users by name/email/ID, groups by name/ID/admin
   const matchUser = (u) => {
     const q = userSearch.trim().toLowerCase();
@@ -985,7 +987,8 @@ export default function OwnerPanel() {
         {menuBtn(MENU[2], pendingUsers.length)}
         {menuBtn(MENU[3], groupRequests.length + userRequests.length)}
         {menuBtn(MENU[4], photoPendingUsers.length)}
-        {MENU.slice(5).map(m => menuBtn(m))}
+        {menuBtn(MENU[5], pendingAdsCount)}
+        {MENU.slice(6).map(m => menuBtn(m))}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -1480,8 +1483,8 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {activeMenu === 'transactions' && (
-            <div className="bg-white rounded-xl border p-6 mt-4">
+          {activeMenu === 'ads' && (
+            <div className="bg-white rounded-xl border p-6">
               <h3 className="font-bold mb-1">📢 Ad Requests</h3>
               <p className="text-xs text-gray-500 mb-4">Businesses that submitted ads from the user site. Approving puts the ad LIVE on the home page (visitors too) and every user dashboard. The submitter is notified either way.</p>
               {ads.filter(a => a.status === 'pending').length === 0 && ads.filter(a => a.status === 'approved').length === 0 ? (
