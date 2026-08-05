@@ -679,3 +679,28 @@ NOTIFY pgrst, 'reload schema';
 -- Files live at: ads-media/ads/<adId>/media-<n>-<ts>.<ext>
 -- The ads table rows now store those https URLs inside media_urls (JSON array);
 -- small media (photos, receipts) stay base64 data-URLs as before. Both render.
+
+-- =========================
+-- v4.0 — AD ANALYTICS + EXPIRY LIFECYCLE (5 Aug 2026)
+-- Every ad impression (a media item genuinely appearing on screen) and every tap-through
+-- to a business page is recorded in ad_events — views count even when nobody clicks.
+-- Dedupe rule in the app: one row per viewer per ad-media per DAY, and the advertiser's
+-- own views of their own ad are never counted (honest reach).
+-- Lifecycle: approved ads auto-hide from the site feed at expires_at; they hold status
+-- 'approved' for 24h on the owner panel (⌛ Expired tab), then the owner panel archives
+-- them (status 'archived') — advertisers keep the ad + analytics in My Ads indefinitely.
+-- =========================
+create table if not exists public.ad_events (
+  id bigint generated always as identity primary key,
+  ad_id text not null references public.ads(id) on delete cascade,
+  kind text not null default 'view',   -- 'view' (impression) | 'click' (opened business page)
+  media_index integer,                 -- which slideshow item (null = whole-ad event)
+  viewer text,                         -- viewer's account email (lowercase); null = guest
+  created_at timestamptz not null default now()
+);
+create index if not exists ad_events_ad_idx on public.ad_events (ad_id, created_at);
+alter table public.ad_events enable row level security;
+create policy "Public insert ad_events" on public.ad_events for insert to anon, authenticated with check (true);
+create policy "Public read ad_events"   on public.ad_events for select to anon, authenticated using (true);
+-- (applied live via the Management API on 5 Aug 2026; re-running this whole file is safe apart
+--  from policy-name collisions — drop policy if exists first if you ever replay it)

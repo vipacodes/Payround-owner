@@ -1,6 +1,263 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK } from '@/lib/supabase';
+
+// 🖼 Ad media helpers — items can be plain strings OR priced objects { src, name, price }
+const isVidSrc = (m) => typeof m === 'string'
+  && (m.startsWith('data:video') || /\.(mp4|webm|mov|m4v|3gp|3gpp|ogg)(\?|#|$)/i.test(m));
+function adsMediaOf(a) {
+  try {
+    const m = JSON.parse(a?.media_urls || '[]');
+    return Array.isArray(m) ? m.map(x => (typeof x === 'string' ? x : x?.src)).filter(Boolean) : [];
+  } catch { return []; }
+}
+const fmtODay = (iso) => { try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; }; };
+const fmtODayShort = (d) => { try { return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch { return d; }; };
+
+// 📊 raw ad_events rows → rich stats (totals, unique accounts, per-media, per-day, tap-through)
+function aggAdEvents(rows) {
+  const views = (rows || []).filter(r => r.kind === 'view');
+  const clicks = (rows || []).filter(r => r.kind === 'click');
+  const uniq = (rs) => new Set(rs.map(r => r.viewer).filter(Boolean)).size;
+  const guests = (rs) => rs.filter(r => !r.viewer).length;
+  const byMedia = new Map();
+  for (const v of views) {
+    const k = v.media_index === null || v.media_index === undefined ? 0 : Number(v.media_index) || 0;
+    if (!byMedia.has(k)) byMedia.set(k, { views: 0, viewers: new Set(), guests: 0 });
+    const b = byMedia.get(k);
+    b.views += 1;
+    if (v.viewer) b.viewers.add(v.viewer); else b.guests += 1;
+  }
+  const byDay = new Map();
+  for (const v of views) {
+    const d = (v.created_at || '').slice(0, 10);
+    if (!d) continue;
+    byDay.set(d, (byDay.get(d) || 0) + 1);
+  }
+  const uniqueAccounts = uniq(views);
+  const uniqueClickers = uniq(clicks);
+  return {
+    totalViews: views.length, uniqueAccounts, guestViews: guests(views),
+    totalClicks: clicks.length, uniqueClickers,
+    tapRate: uniqueAccounts > 0 ? Math.round((uniqueClickers / uniqueAccounts) * 100) : 0,
+    perMedia: [...byMedia.entries()].sort((a, b) => a[0] - b[0])
+      .map(([idx, b]) => ({ idx, views: b.views, accounts: b.viewers.size, guests: b.guests })),
+    perDay: [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+  };
+}
+
+// 🔍 FULL-SCREEN ad media preview — closing it ALWAYS unmounts the video, so playback + sound stop
+// dead. We ALSO explicitly pause+clear the element (belt & braces: no ghost audio, ever).
+function MediaLightbox({ view, onClose, onNav }) {
+  const vidRef = useRef(null);
+  const cur = view.list[view.idx];
+  const vid = isVidSrc(String(cur || ''));
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onNav(1);
+      else if (e.key === 'ArrowLeft') onNav(-1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, onNav]);
+  useEffect(() => () => {
+    const v = vidRef.current;
+    if (v) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }
+  }, [cur]);
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/95 flex flex-col" onClick={onClose}>
+      <div className="flex items-center justify-between gap-2 p-3" onClick={e => e.stopPropagation()}>
+        <div className="min-w-0">
+          <div className="font-bold text-sm text-white truncate">{view.name || 'Ad media'}</div>
+          <div className="text-[11px] text-white/60">{view.idx + 1} of {view.list.length} · {vid ? 'Video' : 'Photo'}</div>
+        </div>
+        <button onClick={onClose} className="shrink-0 bg-white/15 hover:bg-white/30 text-white text-xs font-bold px-4 py-2 rounded-full">✕ Close — video stops 🔇</button>
+      </div>
+      <div className="flex-1 relative flex items-center justify-center px-12 pb-5" onClick={e => e.stopPropagation()}>
+        {vid
+          ? <video key={view.idx} ref={vidRef} src={cur} controls autoPlay muted playsInline className="max-w-full max-h-full rounded-xl" />
+          : <img key={view.idx} src={cur} alt="" className="max-w-full max-h-full object-contain rounded-xl" />}
+        {view.list.length > 1 && (
+          <>
+            <button onClick={() => onNav(-1)} aria-label="Previous media" className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/15 hover:bg-white/30 text-white rounded-full w-10 h-10 text-xl">‹</button>
+            <button onClick={() => onNav(1)} aria-label="Next media" className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/15 hover:bg-white/30 text-white rounded-full w-10 h-10 text-xl">›</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Thumbnails of an ad's slideshow — tap to preview full screen
+function AdThumbs({ ad, onOpen }) {
+  const media = adsMediaOf(ad);
+  if (!media.length) return null;
+  return (
+    <div className="flex gap-1.5 mt-2 flex-wrap items-center">
+      {media.slice(0, 6).map((src, i) => {
+        const v = isVidSrc(String(src || ''));
+        return (
+          <button key={i} type="button" onClick={() => onOpen(media, i)} title="Tap for FULL-SCREEN preview"
+            className="relative w-14 h-14 rounded-lg overflow-hidden border bg-black">
+            {v
+              ? <video src={src} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+              : <img src={src} alt="" className="w-full h-full object-cover" />}
+            <span className="absolute bottom-0.5 right-1 text-[10px] text-white" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.9)' }}>{v ? '▶' : '🔍'}</span>
+          </button>
+        );
+      })}
+      <span className="text-[10px] text-gray-400">{media.length} item{media.length > 1 ? 's' : ''} — tap one to preview full screen</span>
+    </div>
+  );
+}
+
+// 📊 Owner analytics modal for one ad (visible to owner any time; advertisers see it after the run ends)
+function OwnerAdStats({ ad, onClose }) {
+  const [state, setState] = useState('loading'); // loading | ok | empty | error
+  const [stats, setStats] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('ad_events')
+          .select('kind, media_index, viewer, created_at').eq('ad_id', String(ad.id)).limit(50000);
+        if (!alive) return;
+        if (error) { setState('error'); return; }
+        if (!data || !data.length) { setState('empty'); return; }
+        setStats(aggAdEvents(data)); setState('ok');
+      } catch { if (alive) setState('error'); }
+    })();
+    return () => { alive = false; };
+  }, [ad?.id]);
+  const media = adsMediaOf(ad);
+  const maxPerMedia = state === 'ok' ? Math.max(1, ...stats.perMedia.map(m => m.views)) : 1;
+  const maxPerDay = state === 'ok' ? Math.max(1, ...stats.perDay.map(d => d[1])) : 1;
+  const bestDay = state === 'ok' && stats.perDay.length ? stats.perDay.reduce((a, b) => (b[1] > a[1] ? b : a)) : null;
+  const expired = ad?.expires_at && new Date(ad.expires_at).getTime() < Date.now();
+  return (
+    <div className="fixed inset-0 z-[75] bg-black/70 flex items-center justify-center p-3 sm:p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="rounded-t-3xl px-5 pt-5 pb-4" style={{ background: 'linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#334155 100%)' }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-extrabold tracking-widest mb-1" style={{ color: '#94a3b8' }}>📊 AD ANALYTICS (OWNER)</p>
+              <h3 className="text-lg font-extrabold text-white leading-tight truncate">{ad?.business_name || 'Ad'}</h3>
+              <p className="text-[11px] mt-1" style={{ color: '#cbd5e1' }}>
+                {expired ? '⌛ EXPIRED' : '🟢 LIVE'} · ₦{Number(ad?.price || 0).toLocaleString()} · {Number(ad?.duration_days) || '?'}-day plan
+                {ad?.approved_at ? ` · ran ${fmtODay(ad.approved_at)}` : ''}{ad?.expires_at ? ` → ${fmtODay(ad.expires_at)}` : ''}
+              </p>
+            </div>
+            <button onClick={onClose} className="shrink-0 text-[11px] font-bold px-3 py-1.5 rounded-full" style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>✕ Close</button>
+          </div>
+        </div>
+        <div className="p-5 space-y-5">
+          {state === 'loading' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">{[0, 1, 2, 3].map(i => <div key={i} className="h-20 rounded-2xl bg-gray-100 animate-pulse" />)}</div>
+              <div className="h-28 rounded-2xl bg-gray-100 animate-pulse" />
+            </div>
+          )}
+          {state === 'error' && (
+            <div className="text-center py-8">
+              <p className="font-bold text-sm text-gray-900">Analytics could not load just now</p>
+              <p className="text-xs mt-1 text-gray-500">Close and re-open — or check the connection.</p>
+            </div>
+          )}
+          {state === 'empty' && (
+            <div className="text-center py-8">
+              <div className="text-3xl mb-2">📭</div>
+              <p className="font-bold text-sm text-gray-900">No views counted for this ad yet</p>
+              <p className="text-xs mt-1 text-gray-500 max-w-xs mx-auto">View counting started with the analytics update — older runs may show zero. Every impression from now on is counted (even without taps).</p>
+            </div>
+          )}
+          {state === 'ok' && stats && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-2xl p-3.5" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                  <p className="text-xl mb-0.5">👥</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#047857' }}>{stats.uniqueAccounts.toLocaleString()}</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#065f46' }}>ACCOUNTS REACHED</p>
+                  <p className="text-[10px]" style={{ color: '#047857' }}>different PayRound accounts saw this ad</p>
+                </div>
+                <div className="rounded-2xl p-3.5" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+                  <p className="text-xl mb-0.5">👀</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#1d4ed8' }}>{stats.totalViews.toLocaleString()}</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#1e40af' }}>TOTAL VIEWS</p>
+                  <p className="text-[10px]" style={{ color: '#1d4ed8' }}>every on-screen appearance{stats.guestViews ? ` (+${stats.guestViews} guest views)` : ''}</p>
+                </div>
+                <div className="rounded-2xl p-3.5" style={{ background: '#fffbeb', border: '1px solid #fde68a' }}>
+                  <p className="text-xl mb-0.5">👆</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#b45309' }}>{stats.uniqueClickers.toLocaleString()}</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#92400e' }}>OPENED THE PAGE</p>
+                  <p className="text-[10px]" style={{ color: '#b45309' }}>accounts that tapped through to the business</p>
+                </div>
+                <div className="rounded-2xl p-3.5" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
+                  <p className="text-xl mb-0.5">⚡</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#6d28d9' }}>{stats.tapRate}%</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#5b21b6' }}>TAP RATE</p>
+                  <p className="text-[10px]" style={{ color: '#6d28d9' }}>of viewers who opened the business page</p>
+                </div>
+              </div>
+              {stats.perMedia.length > 0 && (
+                <div>
+                  <p className="text-xs font-extrabold mb-2 text-gray-900">🖼 EACH PHOTO & VIDEO</p>
+                  <div className="space-y-2">
+                    {stats.perMedia.map(m => {
+                      const src = media[m.idx];
+                      const isVid = src ? isVidSrc(String(src)) : false;
+                      return (
+                        <div key={m.idx} className="flex items-center gap-3 rounded-2xl p-2.5" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                          <div className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0" style={{ background: '#0f172a' }}>
+                            {src ? (isVid
+                              ? <video src={src} muted playsInline preload="metadata" className="w-full h-full object-contain" />
+                              : <img src={src} alt="" className="w-full h-full object-contain" />)
+                              : <div className="w-full h-full flex items-center justify-center text-white text-xs">🖼</div>}
+                            {isVid && <span className="absolute bottom-0 right-0 text-[8px] text-white px-1 rounded-tl" style={{ background: 'rgba(0,0,0,0.65)' }}>▶</span>}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-extrabold" style={{ color: '#0f172a' }}>{isVid ? 'Video' : 'Photo'} {m.idx + 1}</p>
+                            <div className="mt-1 h-2 rounded-full overflow-hidden" style={{ background: '#e2e8f0' }}>
+                              <div className="h-full rounded-full" style={{ width: `${Math.max(4, Math.round((m.views / maxPerMedia) * 100))}%`, background: 'linear-gradient(90deg,#94a3b8,#0f172a)' }} />
+                            </div>
+                            <p className="text-[10px] mt-1 font-semibold" style={{ color: '#334155' }}>
+                              {m.views.toLocaleString()} view{m.views === 1 ? '' : 's'} · {m.accounts.toLocaleString()} account{m.accounts === 1 ? '' : 's'}{m.guests ? ` · +${m.guests} guest` : ''}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {stats.perDay.length > 0 && (
+                <div>
+                  <p className="text-xs font-extrabold mb-1 text-gray-900">📅 VIEWS PER DAY</p>
+                  {bestDay && <p className="text-[10px] font-semibold mb-2" style={{ color: '#047857' }}>🏆 Best day: {fmtODayShort(bestDay[0])} — {bestDay[1].toLocaleString()} view{bestDay[1] === 1 ? '' : 's'}</p>}
+                  <div className="rounded-2xl p-3" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                    <div className="flex items-end gap-1 h-24">
+                      {stats.perDay.slice(-31).map(([d, v]) => (
+                        <div key={d} className="flex-1 flex flex-col items-center justify-end h-full" title={`${fmtODayShort(d)} — ${v} views`}>
+                          <div className="w-full rounded-t-md" style={{ height: `${Math.max(4, Math.round((v / maxPerDay) * 100))}%`, background: v === maxPerDay ? 'linear-gradient(180deg,#fbbf24,#f59e0b)' : 'linear-gradient(180deg,#94a3b8,#334155)' }} />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-between mt-1.5">
+                      <span className="text-[9px] font-semibold" style={{ color: '#64748b' }}>{fmtODayShort(stats.perDay[0][0])}</span>
+                      <span className="text-[9px] font-semibold" style={{ color: '#64748b' }}>{fmtODayShort(stats.perDay[stats.perDay.length - 1][0])}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <p className="text-[10px] leading-relaxed text-gray-500">👀 The advertiser unlocks this exact report in My Ads → 📊 View Analytics once the ad's run ends.</p>
+              <button onClick={onClose} className="w-full text-sm font-extrabold py-3 rounded-xl text-white" style={{ background: '#0f172a' }}>Close</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Tap-to-load: shows a user's profile selfie for ID comparison in the Verification tab
 function CompareSelfie({ email, onZoom }) {
@@ -276,6 +533,9 @@ export default function OwnerPanel() {
   const [userSearch, setUserSearch] = useState('');
   const [groupSearch, setGroupSearch] = useState('');
   const [receiptView, setReceiptView] = useState(null);
+  const [mediaView, setMediaView] = useState(null);   // 🔍 full-screen ad media preview { list, idx, name }
+  const [adStatsFor, setAdStatsFor] = useState(null); // 📊 analytics modal ad
+  const [adsTab, setAdsTab] = useState('pending');    // 📣 pending | live | expired
 
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
   const [announcementText, setAnnouncementText] = useState('');
@@ -382,6 +642,12 @@ export default function OwnerPanel() {
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
     setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
+    // ⌛ AUTO-CLEAR: ads whose paid run ended 24h+ ago drop off this panel (archived — the advertiser
+    // keeps the ad + its analytics in My Ads; the site feed already hides it the moment it expires)
+    try {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      await supabase.from('ads').update({ status: 'archived' }).eq('status', 'approved').lt('expires_at', cutoff);
+    } catch {}
     setAds(await safe(supabase.from('ads').select('*')));
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
     setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
@@ -746,6 +1012,25 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
+  // 🔍 Full-screen media preview — pause EVERY inline video first so nothing keeps sounding underneath
+  const openMedia = (list, idx, name) => {
+    try { document.querySelectorAll('video').forEach(v => { try { v.pause(); } catch {} }); } catch {}
+    setMediaView({ list, idx, name });
+  };
+  const navMedia = (d) => setMediaView(v => (v ? { ...v, idx: (v.idx + d + v.list.length) % v.list.length } : v));
+
+  // 🗑 Manually clear an expired ad from this panel now (same thing the 24h auto-clear does)
+  const archiveAd = async (ad) => {
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('ads').update({ status: 'archived' }).eq('id', ad.id);
+      if (error) throw error;
+      setMsg(`"${ad.business_name || 'Ad'}" cleared from this list — the advertiser keeps their analytics in My Ads.`);
+      loadData();
+    } catch (e) { setErr(`Could not clear the ad: ${e.message}`); }
+    setBusy(false);
+  };
+
   // 💬 Support inbox — presence toggle + thread handling
   const toggleOnline = async () => {
     const nv = !ownerIsOnline;
@@ -893,6 +1178,11 @@ export default function OwnerPanel() {
   const activeUsers = usersList.filter(isUserApproved);
   const pendingUsers = usersList.filter(u => !isUserApproved(u));
   const pendingAdsCount = ads.filter(a => a.status === 'pending').length;
+  // 📣 Ads tabs — expired ads hold status 'approved' for 24h after ending, then auto-archive (clears here)
+  const adIsExpired = (a) => a.status === 'approved' && a.expires_at && new Date(a.expires_at).getTime() < Date.now();
+  const pendingAds = ads.filter(a => a.status === 'pending');
+  const liveAds = ads.filter(a => a.status === 'approved' && !adIsExpired(a));
+  const expiredAds = ads.filter(adIsExpired);
   // Owner search helpers — users by name/email/ID, groups by name/ID/admin
   const matchUser = (u) => {
     const q = userSearch.trim().toLowerCase();
@@ -1485,67 +1775,103 @@ export default function OwnerPanel() {
 
           {activeMenu === 'ads' && (
             <div className="bg-white rounded-xl border p-6">
-              <h3 className="font-bold mb-1">📢 Ad Requests</h3>
-              <p className="text-xs text-gray-500 mb-4">Businesses that submitted ads from the user site. Approving puts the ad LIVE on the home page (visitors too) and every user dashboard. The submitter is notified either way.</p>
-              {ads.filter(a => a.status === 'pending').length === 0 && ads.filter(a => a.status === 'approved').length === 0 ? (
-                <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No ads submitted yet.</div>
-              ) : (
-                <>
-                  {ads.filter(a => a.status === 'pending').map(a => (
+              <h3 className="font-bold mb-1">📢 Ads</h3>
+              <p className="text-xs text-gray-500 mb-1">Approving puts an ad LIVE on the home page (visitors too) and every user dashboard.</p>
+              <p className="text-xs text-gray-500 mb-4">🖼 Tap any photo or video below to preview it <b>full screen</b> — closing the preview always stops the video (no ghost sound 🔇). ⌛ Expired ads stay listed <b>24 hours</b>, then clear themselves automatically (the advertiser keeps their analytics).</p>
+
+              {/* sub-tabs: pending approval / live / expired */}
+              <div className="flex flex-wrap gap-2 mb-5">
+                {[['pending', '⏳ Pending approval', pendingAds.length], ['live', '🟢 Live', liveAds.length], ['expired', `⌛ Expired`, expiredAds.length]].map(([k, label, n]) => (
+                  <button key={k} onClick={() => setAdsTab(k)}
+                    className={`text-[11px] font-extrabold px-3.5 py-2 rounded-full border transition-all ${adsTab === k ? 'bg-black text-white border-black shadow' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
+                    {label} <span className={adsTab === k ? 'text-white/70' : 'text-gray-400'}>· {n}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* ===== ⏳ PENDING APPROVAL ===== */}
+              {adsTab === 'pending' && (
+                pendingAds.length === 0 ? (
+                  <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No pending ad requests right now. 🎉</div>
+                ) : pendingAds.map(a => (
+                  <div key={a.id} className="border rounded-xl p-4 mb-3">
+                    <div className="flex flex-wrap justify-between items-start gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span> <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">⏱ {Number(a.duration_days) || '?'} day(s) · ₦{Number(a.price || 0).toLocaleString()}</span></div>
+                        <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{a.description || '—'}</div>
+                        <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
+                        <div className="text-[11px] text-gray-400 mt-0.5">📅 Submitted: {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : '—'}</div>
+                        {a.payment_receipt_url ? (
+                          <button onClick={() => setReceiptView({ type: 'Ad payment', name: a.business_name, from: a.submitter_email, date: a.receipt_uploaded_at || a.submitted_at, amount: a.price, receipt: a.payment_receipt_url })} className="mt-2 flex items-center gap-2" title="Tap to view the full receipt">
+                            <img src={a.payment_receipt_url} alt="payment receipt" className="w-14 h-14 rounded-lg object-cover border-2 border-emerald-300" />
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full">🧾 Receipt uploaded{a.receipt_uploaded_at ? ` — ${new Date(a.receipt_uploaded_at).toLocaleDateString()}` : ''} · tap to view</span>
+                          </button>
+                        ) : (
+                          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-2 inline-block">⚠ No payment receipt yet — they may still be about to pay. Approving early is free-for-them.</p>
+                        )}
+                        <AdThumbs ad={a} onOpen={(media, i) => openMedia(media, i, a.business_name || 'Ad media')} />
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button disabled={busy} onClick={() => reviewAd(a, true)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Go Live</button>
+                        <button disabled={busy} onClick={() => reviewAd(a, false)} className="border border-red-200 text-red-600 hover:bg-red-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">Decline</button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {/* ===== 🟢 LIVE ===== */}
+              {adsTab === 'live' && (
+                liveAds.length === 0 ? (
+                  <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No live ads right now.</div>
+                ) : liveAds.map(a => {
+                  const left = a.expires_at ? Math.max(0, Math.ceil((new Date(a.expires_at).getTime() - Date.now()) / 86400000)) : null;
+                  return (
                     <div key={a.id} className="border rounded-xl p-4 mb-3">
                       <div className="flex flex-wrap justify-between items-start gap-2">
                         <div className="min-w-0">
-                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">PENDING</span> <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">⏱ {Number(a.duration_days) || '?'} day(s) · ₦{Number(a.price || 0).toLocaleString()}</span></div>
-                          <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{a.description || '—'}</div>
-                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
-                          <div className="text-[11px] text-gray-400 mt-0.5">📅 Submitted: {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : '—'}</div>
-                          {a.payment_receipt_url ? (
-                            <button onClick={() => setReceiptView({ type: 'Ad payment', name: a.business_name, from: a.submitter_email, date: a.receipt_uploaded_at || a.submitted_at, amount: a.price, receipt: a.payment_receipt_url })} className="mt-2 flex items-center gap-2" title="Tap to view the full receipt">
-                              <img src={a.payment_receipt_url} alt="payment receipt" className="w-14 h-14 rounded-lg object-cover border-2 border-emerald-300" />
-                              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full">🧾 Receipt uploaded{a.receipt_uploaded_at ? ` — ${new Date(a.receipt_uploaded_at).toLocaleDateString()}` : ''} · tap to view</span>
-                            </button>
-                          ) : (
-                            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-2 inline-block">⚠ No payment receipt yet — they may still be about to pay. Approving early is free-for-them.</p>
-                          )}
-                          {(() => { try { const m = JSON.parse(a.media_urls || '[]'); return Array.isArray(m) && m.length > 0 ? (
-                            <div className="flex gap-1.5 mt-2 flex-wrap">{m.slice(0, 6).map((src, i) => (String(src).startsWith('data:video') || /\.(mp4|webm|mov|m4v|3gp|3gpp|ogg)(\?|#|$)/i.test(String(src)))
-                              ? <video key={i} src={src} muted playsInline controls className="w-14 h-14 rounded-lg object-cover border bg-black" />
-                              : <img key={i} src={src} alt="" className="w-14 h-14 rounded-lg object-cover border" />)}<span className="text-[10px] text-gray-400 self-center">{m.length} item{m.length > 1 ? 's' : ''} (slideshow)</span></div>
-                          ) : null; } catch { return null; } })()}
+                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">🟢 LIVE</span> <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">₦{Number(a.price || 0).toLocaleString()} · {a.duration_days || '?'}d plan</span></div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">
+                            {a.approved_at ? `Went live ${new Date(a.approved_at).toLocaleDateString()}` : ''}
+                            {a.expires_at ? ` · Ends ${new Date(a.expires_at).toLocaleDateString()}${left !== null ? ` (${left} day${left === 1 ? '' : 's'} left)` : ''}` : ''}
+                          </div>
+                          <AdThumbs ad={a} onOpen={(media, i) => openMedia(media, i, a.business_name || 'Ad media')} />
                         </div>
-                        <div className="flex gap-2 shrink-0">
-                          <button disabled={busy} onClick={() => reviewAd(a, true)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Go Live</button>
-                          <button disabled={busy} onClick={() => reviewAd(a, false)} className="border border-red-200 text-red-600 hover:bg-red-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">Decline</button>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <button onClick={() => setAdStatsFor(a)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-3 py-1.5 rounded-full hover:bg-violet-100">📊 Analytics</button>
+                          <button disabled={busy} onClick={() => reviewAd(a, false)} className="text-[11px] text-red-500 border border-red-200 px-3 py-1.5 rounded-full disabled:opacity-60">Take Down</button>
                         </div>
                       </div>
                     </div>
-                  ))}
-                  {ads.filter(a => a.status === 'approved').length > 0 && (
-                    <div className="mt-3">
-                      <div className="text-[11px] font-bold text-gray-400 mb-2">LIVE ADS ({ads.filter(a => a.status === 'approved').length})</div>
-                      {ads.filter(a => a.status === 'approved').map(a => {
-                        const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
-                        const left = a.expires_at ? Math.max(0, Math.ceil((new Date(a.expires_at).getTime() - Date.now()) / 86400000)) : null;
-                        return (
-                        <div key={a.id} className="flex flex-wrap justify-between items-center gap-2 border-b last:border-0 py-2.5 text-sm">
-                          <div className="min-w-0">
-                            <span className="font-medium">{a.business_name}</span>{' '}
-                            {expired
-                              ? <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ml-1">⌛ EXPIRED — hidden on site</span>
-                              : <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">LIVE</span>}
-                            <div className="text-[11px] text-gray-400">{[a.contact || a.phone || a.website || '', a.price ? `₦${Number(a.price).toLocaleString()}` : '', a.duration_days ? `${a.duration_days}d plan` : ''].filter(Boolean).join(' • ')}</div>
-                            <div className="text-[11px] text-gray-400">
-                              {a.submitted_at ? `Created ${new Date(a.submitted_at).toLocaleDateString()}` : ''}
-                              {a.expires_at ? ` · ${expired ? 'Ended' : 'Ends'} ${new Date(a.expires_at).toLocaleDateString()}${!expired && left !== null ? ` (${left} day${left === 1 ? '' : 's'} left)` : ''}` : ''}
-                            </div>
-                          </div>
-                          <button disabled={busy} onClick={() => reviewAd(a, false)} className="text-[11px] text-red-500 border border-red-200 px-3 py-1 rounded-full disabled:opacity-60">Take Down</button>
+                  );
+                })
+              )}
+
+              {/* ===== ⌛ EXPIRED (visible 24h, then auto-clears) ===== */}
+              {adsTab === 'expired' && (
+                expiredAds.length === 0 ? (
+                  <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No recently-expired ads. When a live ad's paid days finish it shows here for 24 hours, then clears itself automatically.</div>
+                ) : expiredAds.map(a => {
+                  const sinceEnd = Date.now() - new Date(a.expires_at).getTime();
+                  const hoursLeft = Math.max(0, Math.ceil((86400000 - sinceEnd) / 3600000));
+                  return (
+                    <div key={a.id} className="border rounded-xl p-4 mb-3 bg-gray-50/60">
+                      <div className="flex flex-wrap justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm">{a.business_name || 'Business'} <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ml-1">⌛ EXPIRED — off the site</span> <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">₦{Number(a.price || 0).toLocaleString()} · {a.duration_days || '?'}d plan</span></div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">Ended {a.expires_at ? new Date(a.expires_at).toLocaleString() : '—'} · 🧹 clears from this list in ~{hoursLeft}h</div>
+                          <AdThumbs ad={a} onOpen={(media, i) => openMedia(media, i, a.business_name || 'Ad media')} />
                         </div>
-                        );
-                      })}
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <button onClick={() => setAdStatsFor(a)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-3 py-1.5 rounded-full hover:bg-violet-100">📊 Analytics</button>
+                          <button disabled={busy} onClick={() => archiveAd(a)} className="text-[11px] text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full disabled:opacity-60" title="Remove from this list now (the advertiser keeps their analytics)">🗑 Clear now</button>
+                        </div>
+                      </div>
                     </div>
-                  )}
-                </>
+                  );
+                })
               )}
             </div>
           )}
@@ -1802,6 +2128,11 @@ export default function OwnerPanel() {
           </div>
         </div>
       )}
+
+      {/* 🔍 FULL-SCREEN ad media preview — unmounting it kills any playing video instantly */}
+      {mediaView && <MediaLightbox view={mediaView} onClose={() => setMediaView(null)} onNav={navMedia} />}
+      {/* 📊 per-ad analytics */}
+      {adStatsFor && <OwnerAdStats ad={adStatsFor} onClose={() => setAdStatsFor(null)} />}
     </div>
   );
 
