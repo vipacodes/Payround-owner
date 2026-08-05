@@ -486,6 +486,7 @@ const MENU = [
   { id: 'verification', icon: '✅', label: 'Verification' },
   { id: 'photo_requests', icon: '📷', label: 'Photo Requests' },
   { id: 'ads', icon: '📣', label: 'Ads' },
+  { id: 'businesses', icon: '🏪', label: 'Businesses' },
   { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'support', icon: '💬', label: 'Support Chats' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
@@ -536,6 +537,7 @@ export default function OwnerPanel() {
   const [mediaView, setMediaView] = useState(null);   // 🔍 full-screen ad media preview { list, idx, name }
   const [adStatsFor, setAdStatsFor] = useState(null); // 📊 analytics modal ad
   const [adsTab, setAdsTab] = useState('pending');    // 📣 pending | live | expired
+  const [bizTab, setBizTab] = useState('pending');    // 🏪 pending | approved | hidden
 
   const [bankDetails, setBankDetails] = useState({ bankName: DEFAULT_OWNER_SETTINGS.bank_name, accountNumber: DEFAULT_OWNER_SETTINGS.account_number, accountName: DEFAULT_OWNER_SETTINGS.account_name });
   const [announcementText, setAnnouncementText] = useState('');
@@ -961,10 +963,11 @@ export default function OwnerPanel() {
     try {
       if (announcementFile && supabase.storage) {
         try {
-          const path = `owner/${Date.now()}-${announcementFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
-          const { error: upErr } = await supabase.storage.from('announcements').upload(path, announcementFile, { upsert: true });
-          if (!upErr) mediaUrl = supabase.storage.from('announcements').getPublicUrl(path).data.publicUrl;
-          else setErr(`Media upload skipped (${upErr.message}) — text still published. Create a public "announcements" storage bucket to enable media.`);
+          // Uploads ride the same PUBLIC bucket the ads use (posted to Storage on 5 Aug — verified working)
+          const path = `announcements/${Date.now()}-${announcementFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+          const { error: upErr } = await supabase.storage.from('ads-media').upload(path, announcementFile, { upsert: true, contentType: announcementFile.type || undefined });
+          if (!upErr) mediaUrl = supabase.storage.from('ads-media').getPublicUrl(path).data.publicUrl;
+          else setErr(`Media upload skipped (${upErr.message}) — text still published.`);
         } catch {}
       }
       const { error } = await supabase.from('owner_settings').update({
@@ -1028,6 +1031,22 @@ export default function OwnerPanel() {
       setMsg(`"${ad.business_name || 'Ad'}" cleared from this list — the advertiser keeps their analytics in My Ads.`);
       loadData();
     } catch (e) { setErr(`Could not clear the ad: ${e.message}`); }
+    setBusy(false);
+  };
+
+  // 🏪 Business visibility gate — approve → public everywhere; hide → only the advertiser sees it
+  const reviewBiz = async (ad, status) => {
+    const name = ad.business_name || 'this business';
+    if (status === 'hidden' && !window.confirm(`Hide "${name}" from the public?\n\nThe advertiser still sees their own page (marked "under review") and keeps their items. Re-show anytime.`)) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from('ads').update({ biz_status: status }).eq('id', ad.id);
+      if (error) throw error;
+      setMsg(status === 'approved'
+        ? `✅ "${name}" is now PUBLIC — search, profile links and its business page are live for everyone.`
+        : `🙈 "${name}" is hidden — only the advertiser can see it now (re-show anytime).`);
+      loadData();
+    } catch (e) { setErr(`Business review failed: ${e.message}`); }
     setBusy(false);
   };
 
@@ -1183,6 +1202,14 @@ export default function OwnerPanel() {
   const pendingAds = ads.filter(a => a.status === 'pending');
   const liveAds = ads.filter(a => a.status === 'approved' && !adIsExpired(a));
   const expiredAds = ads.filter(adIsExpired);
+  // 🏪 Business gate — a business profile is PUBLIC only when biz_status === 'approved'.
+  // Queue = every non-declined ad row still 'pending' business review.
+  const bizState = (a) => a.biz_status || 'pending';
+  const bizQueue = ads.filter(a => a.status !== 'declined');
+  const bizPendingCount = bizQueue.filter(a => bizState(a) === 'pending').length;
+  const bizApproved = bizQueue.filter(a => bizState(a) === 'approved');
+  const bizHidden = bizQueue.filter(a => bizState(a) === 'hidden');
+  const bizPending = bizQueue.filter(a => bizState(a) === 'pending');
   // Owner search helpers — users by name/email/ID, groups by name/ID/admin
   const matchUser = (u) => {
     const q = userSearch.trim().toLowerCase();
@@ -1278,7 +1305,8 @@ export default function OwnerPanel() {
         {menuBtn(MENU[3], groupRequests.length + userRequests.length)}
         {menuBtn(MENU[4], photoPendingUsers.length)}
         {menuBtn(MENU[5], pendingAdsCount)}
-        {MENU.slice(6).map(m => menuBtn(m))}
+        {menuBtn(MENU[6], bizPendingCount)}
+        {MENU.slice(7).map(m => menuBtn(m))}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -1873,6 +1901,72 @@ export default function OwnerPanel() {
                   );
                 })
               )}
+            </div>
+          )}
+
+          {/* 🏪 BUSINESSES — a business goes PUBLIC only after you approve it here */}
+          {activeMenu === 'businesses' && (
+            <div className="bg-white rounded-xl border p-6">
+              <h3 className="font-bold mb-1">🏪 Businesses</h3>
+              <p className="text-xs text-gray-500 mb-4">A business profile is <b>visible to the public only after you approve it here</b> — until then its page, search result and profile links show &quot;under review&quot; to everyone except the advertiser (they can still post items). Hiding pulls it back instantly; the advertiser keeps everything.</p>
+
+              <div className="flex flex-wrap gap-2 mb-5">
+                {[['pending', '⏳ Pending review', bizPending.length], ['approved', '🟢 Public', bizApproved.length], ['hidden', '🙈 Hidden', bizHidden.length]].map(([k, label, n]) => (
+                  <button key={k} onClick={() => setBizTab(k)}
+                    className={`text-[11px] font-extrabold px-3.5 py-2 rounded-full border transition-all ${bizTab === k ? 'bg-black text-white border-black shadow' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>
+                    {label} <span className={bizTab === k ? 'text-white/70' : 'text-gray-400'}>· {n}</span>
+                  </button>
+                ))}
+              </div>
+
+              {(() => {
+                const list = bizTab === 'pending' ? bizPending : bizTab === 'approved' ? bizApproved : bizHidden;
+                if (!list.length) return (
+                  <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">
+                    {bizTab === 'pending' ? 'No businesses waiting for review. 🎉' : bizTab === 'approved' ? 'No public businesses yet — approve one from Pending review.' : 'Nothing hidden right now.'}
+                  </div>
+                );
+                return list.map(a => {
+                  const adChip = a.status === 'approved'
+                    ? (adIsExpired(a) ? ['⌛ ad expired', 'bg-gray-100 text-gray-500'] : ['🟢 ad live', 'bg-emerald-100 text-emerald-700'])
+                    : a.status === 'pending'
+                      ? (a.payment_receipt_url ? ['⏳ ad payment in review', 'bg-blue-100 text-blue-700'] : ['💾 ad awaiting payment', 'bg-amber-100 text-amber-700'])
+                      : a.status === 'archived' ? ['⌛ ad ended', 'bg-gray-100 text-gray-500'] : [a.status, 'bg-gray-100 text-gray-500'];
+                  return (
+                    <div key={a.id} className="border rounded-xl p-4 mb-3">
+                      <div className="flex flex-wrap justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm">
+                            {a.business_name || 'Business'}
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ml-1 ${bizTab === 'approved' ? 'bg-emerald-100 text-emerald-700' : bizTab === 'hidden' ? 'bg-gray-200 text-gray-600' : 'bg-amber-100 text-amber-700'}`}>
+                              {bizTab === 'approved' ? '🟢 PUBLIC' : bizTab === 'hidden' ? '🙈 HIDDEN' : '⏳ BUSINESS REVIEW'}
+                            </span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ml-1 ${adChip[1]}`}>{adChip[0]}</span>
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1 whitespace-pre-line">{(a.description || '—').slice(0, 220)}{(a.description || '').length > 220 ? '…' : ''}</div>
+                          <div className="text-[11px] text-gray-400 mt-1">{[a.submitter_email, a.contact || a.phone, a.website].filter(Boolean).join(' • ')}</div>
+                          <div className="text-[11px] text-gray-400 mt-0.5">📅 {a.submitted_at ? new Date(a.submitted_at).toLocaleDateString() : '—'} · 📸 {adsMediaOf(a).length} media item(s)</div>
+                          <AdThumbs ad={a} onOpen={(media, i) => openMedia(media, i, a.business_name || 'Business media')} />
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          {bizTab !== 'approved' && (
+                            <button disabled={busy} onClick={() => reviewBiz(a, 'approved')} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Public</button>
+                          )}
+                          {bizTab === 'approved' && (
+                            <>
+                              <button onClick={() => setAdStatsFor(a)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-3 py-1.5 rounded-full hover:bg-violet-100">📊 Analytics</button>
+                              <button disabled={busy} onClick={() => reviewBiz(a, 'hidden')} className="border border-gray-300 text-gray-600 hover:bg-gray-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">🙈 Hide from public</button>
+                            </>
+                          )}
+                          {bizTab === 'pending' && (
+                            <button disabled={busy} onClick={() => reviewBiz(a, 'hidden')} className="border border-gray-300 text-gray-600 hover:bg-gray-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">🙈 Hide</button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
 

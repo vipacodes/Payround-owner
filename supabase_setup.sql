@@ -704,3 +704,32 @@ create policy "Public insert ad_events" on public.ad_events for insert to anon, 
 create policy "Public read ad_events"   on public.ad_events for select to anon, authenticated using (true);
 -- (applied live via the Management API on 5 Aug 2026; re-running this whole file is safe apart
 --  from policy-name collisions — drop policy if exists first if you ever replay it)
+
+-- =========================
+-- v4.1 — BUSINESS APPROVAL GATE + PUBLIC REVIEWS (5 Aug 2026)
+-- biz_status (pending | approved | hidden): a business profile is PUBLIC only when the
+-- owner approves it from the owner panel's 🏪 Businesses tab; before that its page,
+-- GlobalSearch result and profile links show "under review" to everyone except the
+-- advertiser, who can still post/manage items privately. House ads (id 'ad-house-%')
+-- are pre-approved. Manage-tools on the business page are now for the ACTUAL advertiser
+-- only (PayRound manager emails can manage ONLY house ads).
+-- Announcement media uploads now use the existing public ads-media bucket (path
+-- announcements/<ts>-<name>) — the separate "announcements" bucket is no longer needed.
+-- =========================
+alter table public.ads add column if not exists biz_status text not null default 'pending';
+update public.ads set biz_status = 'approved' where id like 'ad-house-%' and biz_status = 'pending';
+create table if not exists public.business_reviews (
+  id bigint generated always as identity primary key,
+  ad_id text not null references public.ads(id) on delete cascade,
+  reviewer text not null,            -- reviewer's account email (lowercase)
+  reviewer_name text,
+  rating integer not null default 5, -- 1..5 stars
+  text text,
+  created_at timestamptz not null default now()
+);
+create index if not exists business_reviews_ad_idx on public.business_reviews (ad_id, created_at);
+alter table public.business_reviews enable row level security;
+create policy "Public insert business_reviews" on public.business_reviews for insert to anon, authenticated with check (true);
+create policy "Public read business_reviews"   on public.business_reviews for select to anon, authenticated using (true);
+create policy "Public update business_reviews" on public.business_reviews for update to anon, authenticated using (true) with check (true);
+-- (applied live via the Management API on 5 Aug 2026)
