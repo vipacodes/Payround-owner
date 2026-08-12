@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK } from '@/lib/supabase';
+import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK, ownerRest } from '@/lib/supabase';
 
 // 🖼 Ad media helpers — items can be plain strings OR priced objects { src, name, price }
 const isVidSrc = (m) => typeof m === 'string'
@@ -628,15 +628,23 @@ export default function OwnerPanel() {
   }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests, supportThreads]);
 
   const loadData = async () => {
+    let session = null;
+    try {
+      const got = await supabase.auth.getSession();
+      session = got?.data?.session || null;
+    } catch {}
+    if (!session?.access_token) {
+      setLoadIssue('Users failed to load: not signed in to the database. Log out, then log in again with your owner email and the same password as the user site.');
+      return;
+    }
     const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
     setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
-    // Users list — compact select for speed, with a SAFE FALLBACK to select('*')
-    // so the list can NEVER silently go empty (e.g. right after a new column is added).
+    // Users list — always send the Auth token (the bare public key cannot read this table).
     {
-      let rq = await supabase.from('users').select('id, name, email, phone, password_hash, trial_used, role, created_at, is_verified, referred_by, referral_earnings, is_approved, approval_status, decline_reason, pending_profile_pic').order('created_at', { ascending: false });
-      if (rq.error) rq = await supabase.from('users').select('*').order('created_at', { ascending: false });
+      let rq = await ownerRest('users?select=id,name,email,phone,password_hash,trial_used,role,created_at,is_verified,referred_by,referral_earnings,is_approved,approval_status,decline_reason,pending_profile_pic&order=created_at.desc', { session });
+      if (rq.error) rq = await ownerRest('users?select=*&order=created_at.desc', { session });
       if (rq.error) setLoadIssue(`Users failed to load: ${rq.error.message}`);
-      else { setLoadIssue(''); setUsersList(rq.data || []); }
+      else { setLoadIssue(''); setUsersList(Array.isArray(rq.data) ? rq.data : []); }
     }
     // Full rows (with current photo) for users who have a pending photo change — for the Photo Requests tab
     {

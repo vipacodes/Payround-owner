@@ -11,15 +11,50 @@ function getEnv(name, fallback) {
 const supabaseUrl = getEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://biqutnjvhkvldrihywdb.supabase.co');
 const supabaseAnonKey = getEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJpcXV0bmp2aGt2bGRyaWh5d2RiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0Nzk1NjMsImV4cCI6MjEwMTA1NTU2M30.zLffszHcCGRFmnGW0iXSp6BNJ_BMPqQv1W6TXQNxYLU');
 
+export const SUPABASE_URL = supabaseUrl;
+export const SUPABASE_ANON_KEY = supabaseAnonKey;
+
 let supabaseClient = null;
 try {
   if (supabaseUrl && supabaseUrl.startsWith('https://') && supabaseAnonKey && supabaseAnonKey.length > 20) {
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
-      auth: { persistSession: true, autoRefreshToken: true },
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+      },
     });
   }
 } catch (e) {
   console.warn('Supabase client not initialised:', e.message);
+}
+
+/** REST call that always sends the owner Auth token (never the bare anon key). */
+export async function ownerRest(pathAndQuery, { method = 'GET', body, session } = {}) {
+  const tok = session?.access_token;
+  if (!tok) {
+    return { data: null, error: { message: 'Not signed in — log out and log in again.' } };
+  }
+  const res = await fetch(`${supabaseUrl}/rest/v1/${pathAndQuery}`, {
+    method,
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${tok}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+  if (!res.ok) {
+    const message = (parsed && parsed.message) || text || `HTTP ${res.status}`;
+    return { data: null, error: { message } };
+  }
+  return { data: parsed, error: null };
 }
 
 // Offline-safe fallback so the UI never crashes if env vars are missing
