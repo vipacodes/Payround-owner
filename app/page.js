@@ -716,8 +716,11 @@ export default function OwnerPanel() {
     if (!OWNER_EMAILS.includes(em)) { setErr('Access denied — owner accounts only.'); return; }
     setBusy(true);
     try {
-      const hash = await sha256Hex(password);
-      if (hash !== pwHash) { setErr('Invalid password.'); return; }
+      const { error: authErr } = await supabase.auth.signInWithPassword({ email: em, password });
+      if (authErr) {
+        setErr('Invalid owner login. Use the same password as the main Payround site (vipadarapper / payroundsupport).');
+        return;
+      }
       setUser({ email: em, name: 'PayRound Owner' });
       setIsOwner(true);
     } catch { setErr('Login failed in this browser. Use HTTPS.'); }
