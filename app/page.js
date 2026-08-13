@@ -753,14 +753,21 @@ export default function OwnerPanel() {
       setErr('Owner logins cannot be deleted from here.');
       return;
     }
-    if (!window.confirm(`Delete ${u.name || em} forever?\n\nThis removes their login, profile, memberships and any groups they admin. They will not be able to sign in again.`)) return;
+    const reason = window.prompt(
+      `Delete ${u.name || em} forever?\n\nThey are logged out immediately. If they try this email again they will see YOUR reason.\nThey can still create a new free account, or email payroundsupport@gmail.com.\n\nType the reason they will see:`,
+      'This account broke PayRound rules.'
+    );
+    if (reason === null) return;
+    const why = reason.trim();
+    if (!why) { setErr('A reason is required so the person knows why the account was taken down.'); return; }
+    if (!window.confirm(`Take down ${u.name || em}?\n\nThey will see: “${why}”`)) return;
     setBusy(true); setErr(''); setMsg('');
     try {
       const got = await supabase.auth.getSession();
       const session = got?.data?.session;
-      const { data, error } = await ownerRest('rpc/owner_delete_user', { method: 'POST', body: { p_email: em }, session });
+      const { data, error } = await ownerRest('rpc/owner_delete_user', { method: 'POST', body: { p_email: em, p_reason: why }, session });
       if (error) throw error;
-      setMsg(`Deleted ${em} — they can no longer log in.`);
+      setMsg(`Taken down ${em}. They are signed out and will see your reason if they try to log in.`);
       setProfileView(null);
       await loadData();
     } catch (e) { setErr(`Delete user failed: ${e.message}`); }
