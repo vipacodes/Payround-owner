@@ -735,6 +735,43 @@ export default function OwnerPanel() {
     finally { setBusy(false); }
   };
 
+  const ownerDeleteUser = async (u) => {
+    if (!u?.email) return;
+    const em = String(u.email).toLowerCase();
+    if (['vipadarapper@gmail.com', 'payroundsupport@gmail.com'].includes(em)) {
+      setErr('Owner logins cannot be deleted from here.');
+      return;
+    }
+    if (!window.confirm(`Delete ${u.name || em} forever?\n\nThis removes their login, profile, memberships and any groups they admin. They will not be able to sign in again.`)) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const got = await supabase.auth.getSession();
+      const session = got?.data?.session;
+      const { data, error } = await ownerRest('rpc/owner_delete_user', { method: 'POST', body: { p_email: em }, session });
+      if (error) throw error;
+      setMsg(`Deleted ${em} — they can no longer log in.`);
+      setProfileView(null);
+      await loadData();
+    } catch (e) { setErr(`Delete user failed: ${e.message}`); }
+    setBusy(false);
+  };
+
+  const ownerDeleteGroup = async (g) => {
+    if (!g?.id) return;
+    if (!window.confirm(`Delete group "${g.name || g.id}" forever?\n\nMembers, chat, payments and the group page all go. This cannot be undone.`)) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const got = await supabase.auth.getSession();
+      const session = got?.data?.session;
+      const { error } = await ownerRest('rpc/owner_delete_group', { method: 'POST', body: { p_group_id: String(g.id) }, session });
+      if (error) throw error;
+      setMsg(`Deleted group "${g.name || g.id}".`);
+      setProfileView(null);
+      await loadData();
+    } catch (e) { setErr(`Delete group failed: ${e.message}`); }
+    setBusy(false);
+  };
+
   const handleLogout = async () => {
     try { await supabase.auth?.signOut?.(); } catch {}
     setIsOwner(false); setUser(null); setPassword(''); setEmail('');
@@ -2531,6 +2568,7 @@ export default function OwnerPanel() {
               : "border border-sky-300 text-sky-700 bg-sky-50 hover:bg-sky-100 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-60"}>
             {u.is_frozen ? '🔥 Unfreeze User' : '❄️ Freeze User'}
           </button>
+          <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
         </div>
         <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons).</div>
       </div>
