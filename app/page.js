@@ -1818,16 +1818,6 @@ export default function OwnerPanel() {
             <div className="bg-white rounded-xl border p-6 space-y-4">
               <div>
                 <h3 className="font-bold mb-1">📷 Photo Requests</h3>
-                <p className="text-xs text-gray-500">Users must get yous yet — verify from User Requests.</div>
-              )}
-            </div>
-          )}
-
-          {/* 5. PHOTO REQUESTS — approve / decline profile photo changes */}
-          {activeMenu === 'photo_requests' && (
-            <div className="bg-white rounded-xl border p-6 space-y-4">
-              <div>
-                <h3 className="font-bold mb-1">📷 Photo Requests</h3>
                 <p className="text-xs text-gray-500">Users must get your approval before a new profile photo goes live. Compare the current photo with the new one, then Approve or Decline. The user is notified either way. Click any photo to expand it.</p>
               </div>
 
