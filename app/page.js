@@ -608,7 +608,18 @@ export default function OwnerPanel() {
     })();
   }, []);
 
-  useEffect(() => { if (isOwner) loadData(); }, [isOwner]);
+  useEffect(() => {
+    if (!isOwner) return undefined;
+    loadData();
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      loadData();
+    };
+    const t = setInterval(tick, 12000);
+    const onVis = () => { if (!document.hidden) loadData(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis); };
+  }, [isOwner]);
 
   // 📛 App icon badge — the installed owner app shows how many items need a decision
   useEffect(() => {
@@ -1332,7 +1343,12 @@ export default function OwnerPanel() {
         ? 'bg-purple-600 text-white border-purple-900 shadow-[0_4px_0_rgba(0,0,0,0.4)]'
         : 'text-white/70 border-black/30 bg-white/5 hover:bg-white/10 shadow-[0_4px_0_rgba(0,0,0,0.35)] active:shadow-none active:translate-y-[3px]'}`}>
       <span className="flex items-center gap-3">{m.icon} {m.label}</span>
-      {badge > 0 ? <span className="bg-red-500 text-[10px] px-2 py-0.5 rounded-full shadow">{badge}</span> : <span>›</span>}
+      {badge > 0 ? (
+        <span className="relative inline-flex items-center justify-center min-w-[1.4rem] h-5 bg-green-500 text-[10px] font-extrabold px-1.5 rounded-full shadow">
+          {badge}
+          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-300 rounded-full animate-pulse" />
+        </span>
+      ) : <span>›</span>}
     </button>
   );
 
@@ -1365,7 +1381,9 @@ export default function OwnerPanel() {
         {menuBtn(MENU[4], photoPendingUsers.length)}
         {menuBtn(MENU[5], pendingAdsCount)}
         {menuBtn(MENU[6], bizPendingCount)}
-        {MENU.slice(7).map(m => menuBtn(m))}
+        {menuBtn(MENU[7])}
+        {menuBtn(MENU[8], supportThreads.filter(t => !t.owner_read).length)}
+        {MENU.slice(9).map(m => menuBtn(m))}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -1791,6 +1809,16 @@ export default function OwnerPanel() {
                     <button onClick={() => openUserProfile(u)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">View Profile →</button>
                   </div>
                 )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No verified users yet — verify from User Requests.</div>
+              )}
+            </div>
+          )}
+
+          {/* 5. PHOTO REQUESTS — approve / decline profile photo changes */}
+          {activeMenu === 'photo_requests' && (
+            <div className="bg-white rounded-xl border p-6 space-y-4">
+              <div>
+                <h3 className="font-bold mb-1">📷 Photo Requests</h3>
+                <p className="text-xs text-gray-500">Users must get yous yet — verify from User Requests.</div>
               )}
             </div>
           )}
