@@ -11,7 +11,7 @@ export const metadata = {
   title: 'PayRound Owner - Admin Control', 
   description: 'Owner dashboard to control PayRound user site',
   manifest: '/manifest.json',
-  icons: { icon: '/favicon.svg', apple: '/images/apple-icon.svg' },
+  icons: { icon: '/favicon.png', apple: '/images/apple-icon.png' },
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'PR Owner' },
   robots: { index: false, follow: false, nocache: true, googleBot: { index: false, follow: false } }
 };

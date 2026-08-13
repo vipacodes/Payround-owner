@@ -1231,7 +1231,7 @@ export default function OwnerPanel() {
       <div className="min-h-screen bg-[#0f0f23] flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
           <div className="text-center mb-6">
-            <div className="w-14 h-14 bg-purple-700 rounded-xl flex items-center justify-center mx-auto mb-3 text-white font-bold text-xl">P</div>
+            <img src="/images/logo-mark.png" alt="Payround" className="w-14 h-14 rounded-xl mx-auto mb-3 object-cover shadow" />
             <h1 className="text-xl font-bold">PayRound Owner</h1>
             <p className="text-xs text-gray-500 mt-1">Admin control panel — password required every visit</p>
           </div>
@@ -1341,7 +1341,7 @@ export default function OwnerPanel() {
       <div className="p-5 border-b border-white/10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-purple-600 rounded-xl flex items-center justify-center font-bold shadow-[0_3px_0_rgba(0,0,0,0.4)]">P</div>
+            <img src="/images/logo-mark.png" alt="" className="w-9 h-9 rounded-xl object-cover shadow-[0_3px_0_rgba(0,0,0,0.4)]" />
             <div><div className="font-bold">PayRound</div><div className="text-[10px] text-white/50 tracking-widest">OWNER PANEL</div></div>
           </div>
           <button onClick={() => setSidebarOpen(false)} aria-label="Close menu" className="lg:hidden w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center">✕</button>
