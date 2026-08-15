@@ -309,6 +309,21 @@ function currentWeekRange() {
 }
 
 const USER_REF = 'payround-omega.vercel.app/signup?ref=';
+// Privacy-safe owner projection. Referral accounting and DOB privacy stay behind
+// dedicated owner/user RPCs instead of weakening column-level protections.
+const OWNER_USER_SELECT = 'id,email,name,phone,trial_used,role,created_at,is_verified,is_approved,approval_status,decline_reason,profile_pic,pending_profile_pic,id_front_url,id_back_url,gender,address,occupation,bio,bank_name,account_number,account_name,payment_remark,is_frozen';
+const EMPTY_REFERRAL_DASHBOARD = {
+  stats: { relationship_count: 0, unqualified_count: 0, pending_count: 0, awarded_count: 0, available_balance: 0, lifetime_earned: 0, paid_out: 0 },
+  referrers: [],
+  payouts: [],
+};
+const newRequestId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.floor(Math.random() * 16);
+    return (c === 'x' ? r : (r & 3) | 8).toString(16);
+  });
+};
 
 /* ================= OVERALL ANALYTICS — pure-SVG charts (no chart library) ================= */
 const PERIOD_OPTIONS = [
@@ -500,7 +515,7 @@ const MENU = [
   { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'support', icon: '💬', label: 'Support Chats' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
-  { id: 'referral', icon: '🎁', label: 'Referral Bonus' },
+  { id: 'referral', icon: '🎁', label: 'Referral Activity' },
   { id: 'settings', icon: '⚙️', label: 'Settings' },
   { id: 'announcements', icon: '📢', label: 'Announcements' },
 ];
@@ -559,6 +574,9 @@ export default function OwnerPanel() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paymentsAll, setPaymentsAll] = useState([]);   // approved receipts → Contributions chart
   const [payoutsAll, setPayoutsAll] = useState([]);     // collected payouts → Payouts chart
+  const [referralDashboard, setReferralDashboard] = useState(EMPTY_REFERRAL_DASHBOARD);
+  const [referralPayoutForms, setReferralPayoutForms] = useState({});
+  const [referralBusyId, setReferralBusyId] = useState(null);
   const [growthPeriod, setGrowthPeriod] = useState('month');
   const [moneyPeriod, setMoneyPeriod] = useState('month');
   // 💬 Support chats with users (+ the bot holds the fort while you're offline)
@@ -648,18 +666,27 @@ export default function OwnerPanel() {
       setLoadIssue('Users failed to load: not signed in to the database. Log out, then log in again with your owner email and the same password as the user site.');
       return;
     }
-    const safe = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
-    setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false })));
-    // Users list — always send the Auth token (the bare public key cannot read this table).
+    const issues = [];
+    const safe = async (q, label = 'Data') => {
+      try {
+        const { data, error } = await q;
+        if (error) { issues.push(`${label} failed to load: ${error.message}`); return []; }
+        return data || [];
+      } catch (e) {
+        issues.push(`${label} failed to load: ${e.message || 'connection error'}`);
+        return [];
+      }
+    };
+    setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false }), 'Groups'));
+    // Users list — only non-sensitive columns. Referral/DOB data comes from protected RPCs.
     {
-      let rq = await ownerRest('users?select=id,name,email,phone,password_hash,trial_used,role,created_at,is_verified,referred_by,referral_earnings,is_approved,approval_status,decline_reason,pending_profile_pic&order=created_at.desc', { session });
-      if (rq.error) rq = await ownerRest('users?select=*&order=created_at.desc', { session });
-      if (rq.error) setLoadIssue(`Users failed to load: ${rq.error.message}`);
-      else { setLoadIssue(''); setUsersList(Array.isArray(rq.data) ? rq.data : []); }
+      const rq = await ownerRest(`users?select=${OWNER_USER_SELECT}&order=created_at.desc`, { session });
+      if (rq.error) issues.push(`Users failed to load: ${rq.error.message}`);
+      else setUsersList(Array.isArray(rq.data) ? rq.data : []);
     }
-    // Full rows (with current photo) for users who have a pending photo change — for the Photo Requests tab
+    // Full privacy-safe rows for users who have a pending photo change.
     {
-      const pend = await safe(supabase.from('users').select('*').not('pending_profile_pic', 'is', null).order('created_at', { ascending: false }));
+      const pend = await safe(supabase.from('users').select(OWNER_USER_SELECT).not('pending_profile_pic', 'is', null).order('created_at', { ascending: false }), 'Photo requests');
       setPhotoPendingUsers(pend);
     }
     // Auto-cleanup: purge notifications older than 60 days (keeps the database tidy)
@@ -683,8 +710,55 @@ export default function OwnerPanel() {
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
     setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
     // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
-    setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false })));
-    setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false })));
+    setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false }), 'Payments'));
+    setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false }), 'Group payouts'));
+    // Owner-only RPC provides every relationship, qualification, award and cash payout
+    // without granting broad SELECT access to private user columns.
+    {
+      const rq = await ownerRest('rpc/get_owner_referral_dashboard', { method: 'POST', body: {}, session });
+      if (rq.error) issues.push(`Referral activity failed to load: ${rq.error.message}`);
+      else setReferralDashboard(rq.data || EMPTY_REFERRAL_DASHBOARD);
+    }
+    setLoadIssue(issues.join(' • '));
+  };
+
+  const payReferralBonus = async (referrer) => {
+    const form = referralPayoutForms[referrer.user_id] || {};
+    const amount = Number(form.amount);
+    const note = String(form.note || '').trim();
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setErr('Enter a positive whole-naira payout amount.');
+      return;
+    }
+    if (amount > Number(referrer.available_balance || 0)) {
+      setErr(`Payout cannot exceed the available referral balance of ₦${Number(referrer.available_balance || 0).toLocaleString()}.`);
+      return;
+    }
+    if (!window.confirm(`Pay ₦${amount.toLocaleString()} from ${referrer.name || referrer.email}'s referral balance?\n\nThis creates a permanent audit record and leaves ₦${(Number(referrer.available_balance || 0) - amount).toLocaleString()} available.`)) return;
+
+    const requestId = form.requestId || newRequestId();
+    // Keep the same request ID after a network failure. An exact retry is then
+    // returned from the audit ledger without deducting or notifying twice.
+    setReferralPayoutForms(prev => ({ ...prev, [referrer.user_id]: { ...form, requestId } }));
+    setReferralBusyId(referrer.user_id); setErr(''); setMsg('');
+    try {
+      const got = await supabase.auth.getSession();
+      const session = got?.data?.session;
+      const { data, error } = await ownerRest('rpc/owner_pay_referral_bonus', {
+        method: 'POST',
+        body: { p_user_id: referrer.user_id, p_amount: amount, p_note: note || null, p_request_id: requestId },
+        session,
+      });
+      if (error) throw error;
+      setReferralPayoutForms(prev => ({ ...prev, [referrer.user_id]: { amount: '', note: '' } }));
+      setMsg(data?.idempotent_replay
+        ? `This payout had already completed. No second deduction or notification was created. ${referrer.name || referrer.email}'s remaining referral balance is ₦${Number(data?.balance_after || 0).toLocaleString()}.`
+        : `Paid ₦${amount.toLocaleString()} to ${referrer.name || referrer.email}. Remaining referral balance: ₦${Number(data?.balance_after || 0).toLocaleString()}. Audit record saved and user notified.`);
+      await loadData();
+    } catch (e) {
+      setErr(`Referral payout failed: ${e.message}`);
+    }
+    setReferralBusyId(null);
   };
 
   const notify = async (type, groupId, message, userEmail) => {
@@ -697,7 +771,8 @@ export default function OwnerPanel() {
     setErr(''); setMsg('');
     setProfileView({ type: 'user', data: u, request, loadingFull: true });
     try {
-      const { data } = await supabase.from('users').select('*').eq('id', u.id).single();
+      const { data, error } = await supabase.from('users').select(OWNER_USER_SELECT).eq('id', u.id).single();
+      if (error) throw error;
       if (data) setProfileView({ type: 'user', data, request });
     } catch (e) {
       setErr(`Could not load full profile: ${e.message}`);
@@ -1149,7 +1224,7 @@ export default function OwnerPanel() {
     // 👤 load this chatter's profile so you can see WHO you're helping, mid-chat
     try {
       const em = (th.user_email || '').toLowerCase();
-      const { data: urow } = await supabase.from('users').select('*').ilike('email', em).maybeSingle();
+      const { data: urow } = await supabase.from('users').select(OWNER_USER_SELECT).ilike('email', em).maybeSingle();
       let memberOf = 0, adminOf = 0;
       try {
         const { count: mc } = await supabase.from('members').select('id', { count: 'exact', head: true }).eq('member_email', em).eq('status', 'approved');
@@ -1171,7 +1246,7 @@ export default function OwnerPanel() {
     const em = (activeSupport.user_email || '').toLowerCase();
     setBusy(true); setErr(''); setMsg('');
     try {
-      const { data, error } = await supabase.from('users').select('*').ilike('email', em).maybeSingle();
+      const { data, error } = await supabase.from('users').select(OWNER_USER_SELECT).ilike('email', em).maybeSingle();
       if (error) throw error;
       if (data) openUserProfile(data);
       else setErr('No registered account profile found for this email yet.');
@@ -1311,7 +1386,8 @@ export default function OwnerPanel() {
   const groupRatings = (gid) => groupReviews.filter(r => r.group_id === gid);
   const avgRating = (gid) => { const rs = groupRatings(gid); return rs.length ? (rs.reduce((a, r) => a + (r.rating || 0), 0) / rs.length) : 0; };
   const refId = (u) => (u.id || '').slice(0, 8);
-  const referredUsers = (u) => usersList.filter(x => x.referred_by && (x.referred_by === u.id || x.referred_by === refId(u)));
+  const referralAccountFor = (u) => (referralDashboard.referrers || []).find(r => r.user_id === u.id);
+  const referredUsers = (u) => referralAccountFor(u)?.referrals || [];
   const userAdminGroups = (u) => groups.filter(g => g.admin_email === u.email);
   const userMemberGroups = (u) => members.filter(m => m.member_email === u.email && m.status === 'approved');
   const userReviews = (u) => memberReviews.filter(r => r.member_email === u.email);
@@ -1700,7 +1776,7 @@ export default function OwnerPanel() {
               </div>
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
-                Referral: ₦200 per new user who registers with their link — only if the referrer is a member of at least 1 group. Minimum withdrawal ₦1,000 (5 referrals).
+                Referral links are available to every user. A referred person earns the referrer ₦500 only after PayRound approves that person's first qualifying group; if the referrer is not yet in an approved group, the reward stays pending. Open Referral Activity for balances and payouts.
               </div>
             </div>
           )}
@@ -2122,7 +2198,7 @@ export default function OwnerPanel() {
                                 <p className="truncate">📧 {u.email}{u.phone ? ` · 📞 ${u.phone}` : ' · 📞 —'}</p>
                                 <p>🗓 Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'} · 👥 member of {supProfile.memberOf} group{supProfile.memberOf === 1 ? '' : 's'}{supProfile.adminOf > 0 ? ` · 👑 admin of ${supProfile.adminOf}` : ''}</p>
                                 {u.bank_name && <p className="truncate">🏦 {u.bank_name} · {u.account_number || '—'} · {u.account_name || '—'}</p>}
-                                <p className="text-gray-400">✔ approved: {(u.is_approved || u.approval_status === 'approved') ? 'yes' : 'no'} · 🎁 referral earnings: ₦{Number(u.referral_earnings || 0).toLocaleString()}{u.occupation ? ` · 💼 ${u.occupation}` : ''}</p>
+                                <p className="text-gray-400">✔ approved: {(u.is_approved || u.approval_status === 'approved') ? 'yes' : 'no'} · 🎁 referral balances are shown in Referral Activity{u.occupation ? ` · 💼 ${u.occupation}` : ''}</p>
                               </div>
                             </div>
                           ); })()}
@@ -2168,29 +2244,140 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 8. REFERRAL BONUS */}
-          {activeMenu === 'referral' && (
-            <div className="bg-white rounded-xl border p-6">
-              <h3 className="font-bold mb-1">Referral Bonus</h3>
-              <p className="text-xs text-gray-500 mb-4">Users who earned ₦200 per referral. Click a user to see who registered with their link.</p>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 mb-4 space-y-1 font-medium">
-                <div>• Minimum referral bonus withdrawal is ₦1,000</div>
-                <div>• You can earn through referral only if you are a member or admin of a group</div>
-                <div>• So a minimum of 5 new users (₦1,000) is needed before withdrawal</div>
-              </div>
-              {usersList.filter(u => referredUsers(u).length > 0).length > 0 ? usersList.filter(u => referredUsers(u).length > 0).map(u => (
-                <div key={u.id} className="border rounded-xl p-4 mb-2">
-                  <button onClick={() => openUserProfile(u)} className="w-full flex justify-between items-center text-left">
+          {/* 8. REFERRAL ACTIVITY & PAYOUTS */}
+          {activeMenu === 'referral' && (() => {
+            const rs = referralDashboard.stats || EMPTY_REFERRAL_DASHBOARD.stats;
+            const referrers = referralDashboard.referrers || [];
+            const referralPayouts = referralDashboard.payouts || [];
+            return (
+              <div className="space-y-5">
+                <div className="bg-white rounded-xl border p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
                     <div>
-                      <div className="font-medium text-sm">{u.name || u.email} {u.is_verified && <BlueBadge />} <span className="text-xs text-gray-500">ID: {refId(u)}</span></div>
-                      <div className="text-xs text-gray-500">{referredUsers(u).length} referred</div>
+                      <h3 className="font-bold mb-1">Referral Activity & Payouts</h3>
+                      <p className="text-xs text-gray-500 max-w-3xl">Every recorded relationship is shown, including people who have not qualified. A ₦500 reward appears only after PayRound approves the referred person's qualifying group. Cash payouts reduce available balance without changing historical earned claims.</p>
                     </div>
-                    <div className="text-sm font-bold text-green-700">₦{(referredUsers(u).length * 200).toLocaleString()}</div>
-                  </button>
+                    <button onClick={loadData} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">🔁 Refresh</button>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      ['Relationships', rs.relationship_count, '👥'],
+                      ['Unqualified', rs.unqualified_count, '⏳'],
+                      ['Qualified, pending', rs.pending_count, '🕓'],
+                      ['Rewards awarded', rs.awarded_count, '✅'],
+                    ].map(([label, value, icon]) => (
+                      <div key={label} className="rounded-xl border bg-gray-50 p-3">
+                        <div className="text-lg">{icon}</div>
+                        <div className="text-xl font-black mt-1">{Number(value || 0).toLocaleString()}</div>
+                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid sm:grid-cols-3 gap-3 mt-3">
+                    {[
+                      ['Available now', rs.available_balance, 'text-emerald-700 bg-emerald-50 border-emerald-200'],
+                      ['Lifetime earned', rs.lifetime_earned, 'text-purple-700 bg-purple-50 border-purple-200'],
+                      ['Lifetime paid', rs.paid_out, 'text-blue-700 bg-blue-50 border-blue-200'],
+                    ].map(([label, value, tone]) => (
+                      <div key={label} className={`rounded-xl border p-3 ${tone}`}>
+                        <div className="text-[10px] font-bold uppercase tracking-wide opacity-70">{label}</div>
+                        <div className="text-2xl font-black mt-1">₦{Number(value || 0).toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              )) : <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No referral bonuses earned yet — this fills in automatically as people register with referral links.</div>}
-            </div>
-          )}
+
+                <div className="space-y-3">
+                  <h4 className="font-bold text-sm">Referrers and relationship activity ({referrers.length})</h4>
+                  {referrers.length > 0 ? referrers.map(r => {
+                    const form = referralPayoutForms[r.user_id] || { amount: '', note: '' };
+                    const available = Number(r.available_balance || 0);
+                    return (
+                      <div key={r.user_id} className="bg-white rounded-xl border p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {r.profile_pic
+                              ? <img src={r.profile_pic} alt="" className="w-11 h-11 rounded-full object-cover border" />
+                              : <div className="w-11 h-11 rounded-full bg-purple-700 text-white flex items-center justify-center font-bold">{(r.name || r.email || 'U')[0].toUpperCase()}</div>}
+                            <div className="min-w-0">
+                              <div className="font-bold text-sm truncate">{r.name || 'PayRound member'} {r.eligible ? <span className="text-[9px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full">eligible</span> : <span className="text-[9px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">not yet eligible</span>}</div>
+                              <div className="text-[11px] text-gray-500 truncate">{r.email} · ID {String(r.user_id || '').slice(0, 8)}</div>
+                              <div className="text-[10px] text-gray-400 mt-0.5">{r.referral_count || 0} referred · {r.unqualified_count || 0} unqualified · {r.pending_count || 0} pending · {r.awarded_count || 0} awarded</div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-right">
+                            <div><div className="text-[9px] text-gray-400">AVAILABLE</div><div className="text-sm font-black text-emerald-700">₦{available.toLocaleString()}</div></div>
+                            <div><div className="text-[9px] text-gray-400">EARNED</div><div className="text-sm font-bold">₦{Number(r.lifetime_earned || 0).toLocaleString()}</div></div>
+                            <div><div className="text-[9px] text-gray-400">PAID</div><div className="text-sm font-bold text-blue-700">₦{Number(r.paid_out || 0).toLocaleString()}</div></div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 bg-emerald-50/60 border border-emerald-200 rounded-xl p-3">
+                          <div className="text-[11px] font-bold text-emerald-900 mb-2">💸 Payout Referral Bonus</div>
+                          <div className="grid sm:grid-cols-[minmax(120px,180px)_1fr_auto] gap-2">
+                            <input type="number" inputMode="numeric" min="1" max={available || undefined} step="1" disabled={available <= 0 || referralBusyId === r.user_id}
+                              value={form.amount ?? ''}
+                              onChange={e => setReferralPayoutForms(prev => ({ ...prev, [r.user_id]: { ...form, amount: e.target.value, requestId: null } }))}
+                              placeholder={available > 0 ? 'Amount in ₦' : 'No balance'}
+                              className="border rounded-xl px-3 py-2 text-xs bg-white disabled:bg-gray-100" />
+                            <input type="text" maxLength={500} disabled={available <= 0 || referralBusyId === r.user_id}
+                              value={form.note ?? ''}
+                              onChange={e => setReferralPayoutForms(prev => ({ ...prev, [r.user_id]: { ...form, note: e.target.value, requestId: null } }))}
+                              placeholder="Optional payout note"
+                              className="border rounded-xl px-3 py-2 text-xs bg-white disabled:bg-gray-100" />
+                            <button disabled={available <= 0 || referralBusyId === r.user_id} onClick={() => payReferralBonus(r)}
+                              className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-xs font-bold disabled:opacity-50">
+                              {referralBusyId === r.user_id ? 'Paying…' : 'Payout Referral Bonus'}
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-emerald-800 mt-1.5">Enter any whole-naira amount up to ₦{available.toLocaleString()}. Each payout is owner-authorized, audited and sent to the user's notifications.</p>
+                        </div>
+
+                        <div className="mt-3">
+                          <div className="text-[10px] font-bold text-gray-500 mb-1">RELATIONSHIPS</div>
+                          {(r.referrals || []).length > 0 ? (r.referrals || []).map(rel => {
+                            const qualified = rel.status === 'pending' || rel.status === 'awarded';
+                            const awarded = rel.status === 'awarded';
+                            return (
+                              <div key={rel.user_id} className="flex flex-wrap items-center justify-between gap-2 border-t py-2 text-xs">
+                                <div className="min-w-0">
+                                  <div className="font-medium truncate">{rel.name || 'PayRound member'} <span className="text-gray-400 font-normal">· {rel.email}</span></div>
+                                  <div className="text-[10px] text-gray-400">Joined {rel.referred_at ? new Date(rel.referred_at).toLocaleString() : '—'}{rel.qualifying_group_name ? ` · qualifying group: ${rel.qualifying_group_name}` : ''}</div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${awarded ? 'bg-green-100 text-green-700' : qualified ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                                    {awarded ? '₦500 awarded' : qualified ? '₦500 qualified — pending' : 'unqualified — no reward'}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          }) : <div className="text-xs text-gray-400 border-t py-2">No relationship rows.</div>}
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div className="bg-white text-center py-10 border border-dashed rounded-xl text-sm text-gray-500">No referral relationships have been recorded yet.</div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-xl border p-5">
+                  <h4 className="font-bold text-sm mb-1">Payout history ({referralPayouts.length})</h4>
+                  <p className="text-xs text-gray-500 mb-3">Permanent audit trail. Referral claims remain unchanged after payout.</p>
+                  {referralPayouts.length > 0 ? referralPayouts.map(p => (
+                    <div key={p.id} className="border-t first:border-t-0 py-3 flex flex-wrap items-start justify-between gap-3 text-xs">
+                      <div>
+                        <div className="font-bold">{p.user_name || p.user_email} · ₦{Number(p.amount || 0).toLocaleString()}</div>
+                        <div className="text-gray-500">{p.user_email} · balance ₦{Number(p.balance_before || 0).toLocaleString()} → ₦{Number(p.balance_after || 0).toLocaleString()}</div>
+                        {p.note && <div className="text-gray-600 mt-1">Note: {p.note}</div>}
+                      </div>
+                      <div className="text-right text-[10px] text-gray-400">{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}<br />by {p.paid_by_email || 'PayRound owner'}</div>
+                    </div>
+                  )) : <div className="text-center py-8 border border-dashed rounded-xl text-sm text-gray-500">No referral payouts recorded yet.</div>}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* 9. SETTINGS */}
           {activeMenu === 'settings' && (
@@ -2454,7 +2641,9 @@ export default function OwnerPanel() {
   function renderUserProfile(u, request) {
     const adminGs = userAdminGroups(u);
     const memberGs = userMemberGroups(u);
+    const referralAccount = referralAccountFor(u);
     const refs = referredUsers(u);
+    const referredByAccount = (referralDashboard.referrers || []).find(r => (r.referrals || []).some(rel => rel.user_id === u.id));
     const revs = userReviews(u);
     const approved = isUserApproved(u);
     const declined = isUserDeclined(u);
@@ -2537,13 +2726,16 @@ export default function OwnerPanel() {
             {infoRow('Role', u.role || 'member')}
             {infoRow('Joined', u.created_at ? new Date(u.created_at).toLocaleString() : '—')}
             {u.decline_reason && infoRow('Decline reason', u.decline_reason)}
-            {u.referred_by && infoRow('Referred by', u.referred_by)}
+            {referredByAccount && infoRow('Referred by', `${referredByAccount.name || referredByAccount.email} (${String(referredByAccount.user_id).slice(0, 8)})`)}
           </div>
           <div>
             <div className="text-xs font-bold text-gray-500 mb-1">REFERRAL</div>
             {infoRow('Referral link', <span className="text-[10px] break-all">https://{USER_REF}{refId(u)}</span>)}
             {infoRow('Users referred', refs.length)}
-            {infoRow('Earnings', `₦${(refs.length * 200).toLocaleString()} ${(u.referral_earnings || 0) > 0 ? `(+₦${Number(u.referral_earnings).toLocaleString()} credited)` : ''}`)}
+            {infoRow('Available balance', `₦${Number(referralAccount?.available_balance || 0).toLocaleString()}`)}
+            {infoRow('Lifetime earned', `₦${Number(referralAccount?.lifetime_earned || 0).toLocaleString()}`)}
+            {infoRow('Lifetime paid', `₦${Number(referralAccount?.paid_out || 0).toLocaleString()}`)}
+            {infoRow('Qualified, pending', `₦${Number(referralAccount?.pending_count || 0) * 500}`)}
             <button onClick={() => { navigator.clipboard?.writeText(`https://${USER_REF}${refId(u)}`); setMsg('Referral link copied.'); }} className="mt-1 text-[11px] border rounded-full px-3 py-1 hover:bg-gray-50">Copy referral link</button>
           </div>
         </div>
