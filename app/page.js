@@ -1463,10 +1463,13 @@ export default function OwnerPanel() {
   const userMemberGroups = (u) => members.filter(m => m.member_email === u.email && m.status === 'approved');
   const userReviews = (u) => memberReviews.filter(r => r.member_email === u.email);
   const transactions = [
-    ...groups.filter(g => g.creation_receipt_url).map(g => ({ id: `c-${g.id}`, type: `Creation fee (${g.plan_months || '?'}mo plan)`, from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.first_payment_at || g.created_at, receipt: g.creation_receipt_url })),
-    ...groups.filter(g => g.renewal_receipt_url).map(g => ({ id: `r-${g.id}`, type: 'Group renewal', from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.expiry_at || g.created_at, receipt: g.renewal_receipt_url })),
-    ...ads.map(a => ({ id: `a-${a.id}`, type: 'Ad placement', from: a.submitter_email, name: a.business_name, amount: a.price, date: a.submitted_at, receipt: a.payment_receipt_url })),
+    ...groups.filter(g => g.creation_receipt_url).map(g => ({ id: `c-${g.id}`, direction: 'income', type: `Creation fee (${g.plan_months || '?'}mo plan)`, from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.first_payment_at || g.created_at, receipt: g.creation_receipt_url })),
+    ...groups.filter(g => g.renewal_receipt_url).map(g => ({ id: `r-${g.id}`, direction: 'income', type: 'Group renewal', from: g.admin_email, name: g.name, amount: g.plan_price || 5000, date: g.expiry_at || g.created_at, receipt: g.renewal_receipt_url })),
+    ...ads.map(a => ({ id: `a-${a.id}`, direction: 'income', type: 'Ad placement', from: a.submitter_email, name: a.business_name, amount: a.price, date: a.submitted_at, receipt: a.payment_receipt_url })),
+    ...(referralDashboard.payouts || []).map(p => ({ id: `ref-${p.id}`, direction: 'expense', type: 'Referral bonus payout', from: p.paid_by_email || 'PayRound owner', to: p.user_email, name: p.user_name || p.user_email || 'PayRound member', amount: p.amount, date: p.created_at, receipt: null })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  const totalIncome = transactions.filter(t => t.direction === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+  const totalExpense = transactions.filter(t => t.direction === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
   /* ---------- OVERALL ANALYTICS derived data (live from Supabase) ---------- */
   const datedTs = [...usersList.map(u => u.created_at), ...groups.map(g => g.created_at)].filter(Boolean).map(t => new Date(t).getTime());
@@ -2052,18 +2055,35 @@ export default function OwnerPanel() {
 
           {/* 6. TRANSACTIONS */}
           {activeMenu === 'transactions' && (
-            <div className="bg-white rounded-xl border p-6">
+            <div className="bg-white rounded-xl border p-4 sm:p-6">
               <h3 className="font-bold mb-1">Transactions</h3>
-              <p className="text-xs text-gray-500 mb-4">Every payment between users and you — group creation fees, renewals, ads. Click a row to view its receipt.</p>
-              {transactions.length > 0 ? transactions.map(t => (
-                <button key={t.id} onClick={() => setReceiptView(t)} className="w-full flex flex-wrap justify-between items-center gap-2 border-b last:border-0 py-3 text-sm hover:bg-gray-50 text-left px-2 rounded-lg">
-                  <div>
-                    <div className="font-medium">{t.type} — {t.name}</div>
-                    <div className="text-xs text-gray-500">{t.from} • {t.date ? new Date(t.date).toLocaleString() : 'No date'}</div>
-                  </div>
-                  <div className="font-bold">₦{Number(t.amount || 0).toLocaleString()}</div>
-                </button>
-              )) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No transactions yet. Payments to {bankDetails.bankName} {bankDetails.accountNumber} will show here automatically.</div>}
+              <p className="text-xs text-gray-500 mb-4">Owner income from group fees, renewals and ads, together with referral-bonus expenses. Tap a row to view its details or receipt.</p>
+
+              <div className="grid grid-cols-2 gap-3 mb-5">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 sm:p-4 text-left">
+                  <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-emerald-700">Total Income</div>
+                  <div className="text-lg sm:text-2xl font-extrabold text-emerald-600 mt-1">₦{totalIncome.toLocaleString()}</div>
+                </div>
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 sm:p-4 text-right">
+                  <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-red-700">Total Expense</div>
+                  <div className="text-lg sm:text-2xl font-extrabold text-red-600 mt-1">₦{totalExpense.toLocaleString()}</div>
+                </div>
+              </div>
+
+              {transactions.length > 0 ? transactions.map(t => {
+                const isExpense = t.direction === 'expense';
+                return (
+                  <button key={t.id} onClick={() => setReceiptView(t)} className="w-full flex flex-nowrap justify-between items-center gap-3 border-b last:border-0 py-3 text-sm hover:bg-gray-50 text-left px-2 rounded-lg">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{t.type} — {t.name}</div>
+                      <div className="text-xs text-gray-500 truncate">{isExpense ? `Paid to ${t.to || t.name}` : t.from} • {t.date ? new Date(t.date).toLocaleString() : 'No date'}</div>
+                    </div>
+                    <div className={`font-extrabold shrink-0 ${isExpense ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {isExpense ? '−' : '+'}₦{Number(t.amount || 0).toLocaleString()}
+                    </div>
+                  </button>
+                );
+              }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No transactions yet. Payments to {bankDetails.bankName} {bankDetails.accountNumber} will show here automatically.</div>}
             </div>
           )}
 
@@ -2096,7 +2116,7 @@ export default function OwnerPanel() {
                         <div className="text-[11px] text-gray-400 mt-1">{[a.contact || a.phone, a.whatsapp ? `WhatsApp: ${a.whatsapp}` : '', a.website, a.submitter_email].filter(Boolean).join(' • ')}</div>
                         <div className="text-[11px] text-gray-400 mt-0.5">📅 Submitted: {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : '—'}</div>
                         {a.payment_receipt_url ? (
-                          <button onClick={() => setReceiptView({ type: 'Ad payment', name: a.business_name, from: a.submitter_email, date: a.receipt_uploaded_at || a.submitted_at, amount: a.price, receipt: a.payment_receipt_url })} className="mt-2 flex items-center gap-2" title="Tap to view the full receipt">
+                          <button onClick={() => setReceiptView({ direction: 'income', type: 'Ad payment', name: a.business_name, from: a.submitter_email, date: a.receipt_uploaded_at || a.submitted_at, amount: a.price, receipt: a.payment_receipt_url })} className="mt-2 flex items-center gap-2" title="Tap to view the full receipt">
                             <img src={a.payment_receipt_url} alt="payment receipt" className="w-14 h-14 rounded-lg object-cover border-2 border-emerald-300" />
                             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full">🧾 Receipt uploaded{a.receipt_uploaded_at ? ` — ${new Date(a.receipt_uploaded_at).toLocaleDateString()}` : ''} · tap to view</span>
                           </button>
@@ -2586,11 +2606,13 @@ export default function OwnerPanel() {
             <div className="flex justify-between items-center mb-3">
               <div>
                 <div className="font-bold">{receiptView.type}</div>
-                <div className="text-xs text-gray-500">{receiptView.name} • {receiptView.from} • {receiptView.date ? new Date(receiptView.date).toLocaleString() : ''}</div>
+                <div className="text-xs text-gray-500">{receiptView.name} • {receiptView.direction === 'expense' ? `Paid to ${receiptView.to || receiptView.name}` : receiptView.from} • {receiptView.date ? new Date(receiptView.date).toLocaleString() : ''}</div>
               </div>
               <button onClick={() => setReceiptView(null)} className="text-xs border rounded-full px-3 py-1 hover:bg-gray-50">Close</button>
             </div>
-            <div className="text-sm font-bold mb-2">₦{Number(receiptView.amount || 0).toLocaleString()}</div>
+            <div className={`text-sm font-extrabold mb-2 ${receiptView.direction === 'expense' ? 'text-red-600' : 'text-emerald-600'}`}>
+              {receiptView.direction === 'expense' ? '−' : '+'}₦{Number(receiptView.amount || 0).toLocaleString()}
+            </div>
             {receiptView.receipt
               ? <img src={receiptView.receipt} alt="Transaction receipt" className="w-full rounded-xl border" />
               : <div className="text-center text-gray-500 border border-dashed rounded-xl py-10 text-sm">No receipt image attached.</div>}
