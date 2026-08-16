@@ -1209,6 +1209,7 @@ export default function OwnerPanel() {
         if (!window.confirm(`Decline "${ad.business_name}" with reason:\n\n"${rejectReason}"\n\nProceed?`)) { setBusy(false); return; }
       }
       const patch = { status: approve ? 'approved' : 'declined', reject_reason: rejectReason };
+      if (!approve) patch.biz_status = 'hidden';
       if (approve) {
         const days = Number(ad.duration_days) || 7;
         const now = Date.now();
@@ -1240,7 +1241,7 @@ export default function OwnerPanel() {
   const archiveAd = async (ad) => {
     setBusy(true);
     try {
-      const { error } = await supabase.from('ads').update({ status: 'archived' }).eq('id', ad.id);
+      const { error } = await supabase.from('ads').update({ status: 'archived', biz_status: 'hidden' }).eq('id', ad.id);
       if (error) throw error;
       setMsg(`"${ad.business_name || 'Ad'}" cleared from this list — the advertiser keeps their analytics in My Ads.`);
       loadData();
@@ -1425,10 +1426,12 @@ export default function OwnerPanel() {
   const pendingAds = ads.filter(a => a.status === 'pending');
   const liveAds = ads.filter(a => a.status === 'approved' && !adIsExpired(a));
   const expiredAds = ads.filter(adIsExpired);
-  // 🏪 Business gate — a business profile is PUBLIC only when biz_status === 'approved'.
-  // Queue = every non-declined ad row still 'pending' business review.
+  // 🏪 Business gate — public business profiles must also have an active,
+  // unexpired approved ad. Removed/archived/declined/expired rows stay out.
   const bizState = (a) => a.biz_status || 'pending';
-  const bizQueue = ads.filter(a => a.status !== 'declined');
+  const businessIsInactive = (a) => ['declined', 'archived'].includes(a.status)
+    || (a.expires_at && new Date(a.expires_at).getTime() <= Date.now());
+  const bizQueue = ads.filter(a => !businessIsInactive(a));
   const bizPendingCount = bizQueue.filter(a => bizState(a) === 'pending').length;
   const bizApproved = bizQueue.filter(a => bizState(a) === 'approved');
   const bizHidden = bizQueue.filter(a => bizState(a) === 'hidden');
