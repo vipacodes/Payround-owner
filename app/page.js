@@ -591,6 +591,9 @@ export default function OwnerPanel() {
   const [reportsSub, setReportsSub] = useState('pending');
   const [reportNotes, setReportNotes] = useState({});
   const [reportBusyId, setReportBusyId] = useState(null);
+  const [reportNotices, setReportNotices] = useState({});
+  const [reportNoticeBusyId, setReportNoticeBusyId] = useState(null);
+  const [supportOpeningId, setSupportOpeningId] = useState(null);
   const [activeSupport, setActiveSupport] = useState(null);
   const [supportMsgs, setSupportMsgs] = useState([]);
   const [supReply, setSupReply] = useState('');
@@ -1083,6 +1086,31 @@ export default function OwnerPanel() {
     setReportBusyId(null);
   };
 
+  const sendReportNotification = async (report) => {
+    const form = reportNotices[report.id] || { audience: 'reporter', message: '' };
+    const audience = form.audience || 'reporter';
+    const text = String(form.message || '').trim();
+    if (text.length < 2) { setErr('Type the custom notification before sending.'); return; }
+    if (text.length > 1000) { setErr('Report follow-up notifications cannot exceed 1000 characters.'); return; }
+    const reportedLabel = report.target_type === 'group' ? "the reported group's admin" : 'the reported user';
+    const recipientLabel = audience === 'reporter' ? 'the reporter' : audience === 'reported' ? reportedLabel : `the reporter and ${reportedLabel}`;
+    const privacyWarning = audience === 'reporter' ? '' : '\n\nIMPORTANT: This text must not reveal the reporter identity or any private report evidence.';
+    if (!window.confirm(`Send this custom PayRound notification to ${recipientLabel}?${privacyWarning}\n\nThis is a deliberate message. Changing report status remains non-notifying.`)) return;
+
+    setReportNoticeBusyId(report.id); setErr(''); setMsg('');
+    try {
+      const { data, error } = await supabase.rpc('owner_send_report_notification', {
+        p_report_id: report.id,
+        p_audience: audience,
+        p_message: text,
+      });
+      if (error) throw error;
+      setReportNotices(prev => ({ ...prev, [report.id]: { audience, message: '' } }));
+      setMsg(`Custom notification sent to ${Number(data?.sent || 0)} recipient${Number(data?.sent || 0) === 1 ? '' : 's'}. No report status or private evidence was disclosed automatically.`);
+    } catch (e) { setErr(`Report notification failed: ${e.message}`); }
+    setReportNoticeBusyId(null);
+  };
+
   const openReportedTarget = (report) => {
     if (report.target_type === 'user') {
       const target = usersList.find(u => String(u.id) === String(report.target_ref));
@@ -1391,6 +1419,25 @@ export default function OwnerPanel() {
       setSupProfile({ user: urow, memberOf, adminOf });
     } catch { setSupProfile({ user: null, memberOf: 0, adminOf: 0 }); }
     setSupProfileLoading(false);
+  };
+
+  const startUserSupportChat = async (u) => {
+    if (!u?.id || supportOpeningId) return;
+    setSupportOpeningId(u.id); setErr(''); setMsg('');
+    try {
+      // Support is intentionally separate from member-to-member requests, so
+      // PayRound can always reach every profile, including frozen users.
+      const { data, error } = await supabase.rpc('owner_open_user_support_chat', { p_user_id: u.id });
+      if (error) throw error;
+      if (!data?.id) throw new Error('Support conversation could not be opened');
+      setSupportThreads(prev => [data, ...prev.filter(thread => thread.id !== data.id)]);
+      setProfileView(null);
+      setActiveMenu('support');
+      setSidebarOpen(false);
+      await openSupportThread(data);
+      setMsg(`PayRound Support chat opened for ${u.name || u.email}. Type your message below.`);
+    } catch (e) { setErr(`Could not open Support chat: ${e.message}`); }
+    setSupportOpeningId(null);
   };
 
   // open the FULL profile modal (same one as the Users tab) for the user you're chatting with
@@ -2581,6 +2628,47 @@ export default function OwnerPanel() {
                           </div>
                         </div>
                       </div>
+
+                      <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-extrabold text-emerald-900">💬 SEND A CUSTOM FOLLOW-UP NOTIFICATION</div>
+                            <p className="text-[10px] text-emerald-800 mt-1">Manual and separate from review status. Nothing is sent until you type a message and press Send.</p>
+                          </div>
+                          <select
+                            value={reportNotices[report.id]?.audience || 'reporter'}
+                            onChange={e => setReportNotices(prev => ({ ...prev, [report.id]: { ...(prev[report.id] || {}), audience: e.target.value } }))}
+                            className="border border-emerald-200 bg-white rounded-lg px-3 py-2 text-xs font-bold text-gray-800"
+                          >
+                            <option value="reporter">Reporter only</option>
+                            <option value="reported">{report.target_type === 'group' ? 'Reported group admin only' : 'Reported user only'}</option>
+                            <option value="both">{report.target_type === 'group' ? 'Reporter + group admin' : 'Reporter + reported user'}</option>
+                          </select>
+                        </div>
+                        {(reportNotices[report.id]?.audience || 'reporter') !== 'reporter' && (
+                          <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] font-bold text-red-800">
+                            ⚠️ Reporter anonymity: do not name or identify the reporter, quote their private evidence, or reveal owner-only report details to the reported party.
+                          </div>
+                        )}
+                        <textarea
+                          rows={3}
+                          maxLength={1000}
+                          value={reportNotices[report.id]?.message || ''}
+                          onChange={e => setReportNotices(prev => ({ ...prev, [report.id]: { ...(prev[report.id] || {}), message: e.target.value } }))}
+                          placeholder="Type the exact PayRound notification the selected recipient(s) should receive…"
+                          className="w-full mt-3 border border-emerald-200 bg-white rounded-xl px-3 py-2 text-xs resize-y focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                        />
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] text-gray-500">{(reportNotices[report.id]?.message || '').length}/1000 · Report status still sends no automatic notification.</span>
+                          <button
+                            disabled={reportNoticeBusyId === report.id || !(reportNotices[report.id]?.message || '').trim()}
+                            onClick={() => sendReportNotification(report)}
+                            className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-4 py-2 rounded-lg disabled:opacity-50"
+                          >
+                            {reportNoticeBusyId === report.id ? 'Sending…' : 'Send custom notification'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -3151,6 +3239,10 @@ export default function OwnerPanel() {
         </div>
 
         <div className="mt-5 border-t pt-4 flex flex-wrap gap-2">
+          <button disabled={supportOpeningId === u.id} onClick={() => startUserSupportChat(u)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">
+            {supportOpeningId === u.id ? 'Opening chat…' : '💬 Open PayRound Support Chat'}
+          </button>
           {!approved && (
             <button disabled={busy} onClick={() => approveUser(u)} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve User</button>
           )}
@@ -3179,7 +3271,7 @@ export default function OwnerPanel() {
             <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
           )}
         </div>
-        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice. Voluntary deletion requests keep all data for seven days and can be restored by the user or by you before the deadline.</div>
+        <div className="text-[10px] text-gray-400 mt-2">The Support Chat button opens or creates this user's official PayRound Support conversation, including for frozen accounts. Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice. Voluntary deletion requests keep all data for seven days and can be restored by the user or by you before the deadline.</div>
       </div>
     );
   }
