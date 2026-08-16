@@ -990,12 +990,11 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('users').update({ is_frozen: freeze }).eq('id', u.id);
       if (error) throw error;
-      await notify(freeze ? 'account_frozen' : 'account_unfrozen', null,
-        freeze
-          ? '❄️ Your PayRound account has been frozen — the app is paused for you. Contact support on WhatsApp (+234 915 1723 199) if this seems wrong.'
-          : '🔥 Your PayRound account is active again — welcome back! You can use the app normally.',
-        u.email);
-      setMsg(freeze ? `❄️ ${u.name || u.email} is now FROZEN — their app is blocked.` : `🔥 ${u.name || u.email} is unfrozen.`);
+      // The database trigger creates the personal notice in the same transaction as
+      // this state change, so a successful freeze/unfreeze can never silently miss it.
+      setMsg(freeze
+        ? `❄️ ${u.name || u.email} is now FROZEN — their app is blocked and they were notified.`
+        : `🔥 ${u.name || u.email} is unfrozen — they were notified that access is restored.`);
       setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
       loadData();
     } catch (e) { setErr(`Freeze failed: ${e.message}`); }
@@ -2915,7 +2914,7 @@ export default function OwnerPanel() {
           </button>
           <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
         </div>
-        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons).</div>
+        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice.</div>
       </div>
     );
   }
