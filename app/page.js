@@ -704,7 +704,7 @@ export default function OwnerPanel() {
     try {
       const total =
         groups.filter(g => g.status === 'pending_owner').length +
-        usersList.filter(u => !(u.is_approved === true || u.approval_status === 'approved')).length +
+        usersList.filter(u => !(u.is_approved === true || u.approval_status === 'approved') && !u.is_frozen && u.deletion_status !== 'pending').length +
         verifyRequests.filter(r => r.status === 'pending').length +
         photoPendingUsers.length +
         editRequests.filter(r => r.status === 'pending').length +
@@ -911,6 +911,22 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
+  const ownerRestoreAccountDeletion = async (u) => {
+    if (!u?.id) return;
+    const deadline = u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : 'the recovery deadline';
+    if (!window.confirm(`Restore ${u.name || u.email}?\n\nThis cancels their scheduled permanent deletion (${deadline}) and keeps all account data active.`)) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { data, error } = await supabase.rpc('owner_restore_account_deletion', { p_user_id: u.id });
+      if (error) throw error;
+      if (!data?.restored && !data?.already_active) throw new Error('The account could not be restored.');
+      setMsg(`♻️ Restored ${u.name || u.email}. Their scheduled deletion was cancelled and they were privately notified.`);
+      setProfileView(null);
+      await loadData();
+    } catch (e) { setErr(`Restore account failed: ${e.message}`); }
+    setBusy(false);
+  };
+
   const ownerDeleteGroup = async (g) => {
     if (!g?.id) return;
     if (!window.confirm(`Delete group "${g.name || g.id}" forever?\n\nMembers, chat, payments and the group page all go. This cannot be undone.`)) return;
@@ -995,7 +1011,9 @@ export default function OwnerPanel() {
       setMsg(freeze
         ? `❄️ ${u.name || u.email} is now FROZEN — their app is blocked and they were notified.`
         : `🔥 ${u.name || u.email} is unfrozen — they were notified that access is restored.`);
-      setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
+      if (profileView?.type === 'user' && String(profileView.data?.id) === String(u.id)) {
+        setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
+      }
       loadData();
     } catch (e) { setErr(`Freeze failed: ${e.message}`); }
     setBusy(false);
@@ -1417,8 +1435,23 @@ export default function OwnerPanel() {
   const verifiedGroups = groups.filter(g => g.is_verified);
   const isUserApproved = (u) => u.is_approved === true || u.approval_status === 'approved';
   const isUserDeclined = (u) => u.approval_status === 'declined';
-  const activeUsers = usersList.filter(isUserApproved);
-  const pendingUsers = usersList.filter(u => !isUserApproved(u));
+  const isDeletionQueued = (u) => u.deletion_status === 'pending';
+  // Frozen and queued accounts have dedicated operational views and are never
+  // hidden inside the ordinary Active/Pending lists. A frozen+queued account
+  // appears in both dedicated safety views, but in neither ordinary list.
+  const activeUsers = usersList.filter(u => isUserApproved(u) && !u.is_frozen && !isDeletionQueued(u));
+  const pendingUsers = usersList.filter(u => !isUserApproved(u) && !u.is_frozen && !isDeletionQueued(u));
+  const frozenUsers = usersList.filter(u => !!u.is_frozen);
+  const deletionQueuedUsers = usersList.filter(isDeletionQueued);
+  const deletionCountdown = (u) => {
+    if (!u?.deletion_scheduled_for) return 'Deadline unavailable';
+    const ms = new Date(u.deletion_scheduled_for).getTime() - Date.now();
+    if (ms <= 0) return 'Recovery ended — permanent deletion is processing';
+    const days = Math.floor(ms / 86400000);
+    const hours = Math.floor((ms % 86400000) / 3600000);
+    const minutes = Math.floor((ms % 3600000) / 60000);
+    return `${days}d ${hours}h ${minutes}m remaining`;
+  };
   const pendingAdsCount = ads.filter(a => a.status === 'pending').length;
   // 📣 Ads tabs — expired ads hold status 'approved' for 24h after ending, then auto-archive (clears here)
   const adIsExpired = (a) => a.status === 'approved' && a.expires_at && new Date(a.expires_at).getTime() < Date.now();
@@ -1657,7 +1690,7 @@ export default function OwnerPanel() {
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Users Registered</div>
                   <div className="font-bold text-3xl mt-1">{usersList.length}</div>
-                  <div className="text-[10px] text-green-600 mt-1">{activeUsers.length} approved • {verifiedUsers.length} blue-verified • {pendingUsers.length} pending</div>
+                  <div className="text-[10px] text-green-600 mt-1">{activeUsers.length} active • {verifiedUsers.length} blue-verified • {pendingUsers.length} pending • {frozenUsers.length} frozen • {deletionQueuedUsers.length} deletion queued</div>
                 </div>
                 <div className="bg-white rounded-xl border p-5">
                   <div className="text-xs text-gray-500">Total Active Groups</div>
@@ -1857,22 +1890,27 @@ export default function OwnerPanel() {
                 </div>
               )}
 
-              {subPills([{ id: 'active', label: '✅ Active Users', count: activeUsers.length }, { id: 'pending', label: '🕓 Pending Approval', count: pendingUsers.length }], usersSub, setUsersSub)}
+              {subPills([
+                { id: 'active', label: '✅ Active Users', count: activeUsers.length },
+                { id: 'pending', label: '🕓 Pending Approval', count: pendingUsers.length },
+                { id: 'frozen', label: '❄️ Frozen Accounts', count: frozenUsers.length },
+                { id: 'deletion', label: '🗓 Queued for Deletion', count: deletionQueuedUsers.length },
+              ], usersSub, setUsersSub)}
 
               <div className="grid md:grid-cols-2 gap-4">
                 {usersSub === 'active' ? (
                   activeUsers.filter(matchUser).length > 0 ? activeUsers.filter(matchUser).map(u => (
                     <div key={u.id} className="border rounded-xl p-4">
-                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
                       <button onClick={() => openUserProfile(u)} className="mt-2 text-xs border rounded-full px-3 py-1 hover:bg-gray-50 font-medium">👁 View Profile</button>
                     </div>
-                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No users match "${userSearch}".` : 'No approved users yet — approve users from the pending list.'}</div>
-                ) : (
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No users match "${userSearch}".` : 'No active users. Frozen and deletion-queued accounts have their own tabs.'}</div>
+                ) : usersSub === 'pending' ? (
                   pendingUsers.filter(matchUser).length > 0 ? pendingUsers.filter(matchUser).map(u => (
                     <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
-                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email} • Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</div>
                       {u.decline_reason && <div className="text-[11px] text-red-600 mt-1">Reason: {u.decline_reason}</div>}
@@ -1883,6 +1921,35 @@ export default function OwnerPanel() {
                       </div>
                     </div>
                   )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No users match "${userSearch}".` : 'No users waiting for approval.'}</div>
+                ) : usersSub === 'frozen' ? (
+                  frozenUsers.filter(matchUser).length > 0 ? frozenUsers.filter(matchUser).map(u => (
+                    <div key={u.id} className="border border-sky-200 bg-sky-50/40 rounded-xl p-4">
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span> {isDeletionQueued(u) && <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full ml-1">🗓 deletion queued</span>}</div>
+                      <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
+                      <div className="text-xs text-gray-500">{u.email} • {isUserApproved(u) ? 'Approved account' : 'Approval pending'}</div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <button onClick={() => openUserProfile(u)} className="text-xs border bg-white rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        <button disabled={busy} onClick={() => freezeUser(u, false)} className="text-xs font-bold text-white bg-sky-600 rounded-full px-3 py-1.5 hover:bg-sky-700 disabled:opacity-60">🔥 Unfreeze Account</button>
+                      </div>
+                    </div>
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No frozen accounts match "${userSearch}".` : 'No frozen accounts.'}</div>
+                ) : (
+                  deletionQueuedUsers.filter(matchUser).length > 0 ? deletionQueuedUsers.filter(matchUser).map(u => (
+                    <div key={u.id} className="border border-amber-200 bg-amber-50/50 rounded-xl p-4">
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full ml-1">🗓 queued</span> {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>}</div>
+                      <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
+                      <div className="text-xs text-gray-500">{u.email}</div>
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-white/80 p-2.5">
+                        <div className={`text-xs font-extrabold ${u.deletion_can_restore ? 'text-amber-800' : 'text-red-700'}`}>{deletionCountdown(u)}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'}</div>
+                        <div className="text-[10px] text-gray-400">Requested: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <button onClick={() => openUserProfile(u)} className="text-xs border bg-white rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="text-xs font-bold text-white bg-emerald-600 rounded-full px-3 py-1.5 hover:bg-emerald-700 disabled:opacity-60">♻️ Restore Account</button>}
+                      </div>
+                    </div>
+                  )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No queued accounts match "${userSearch}".` : 'No accounts are queued for deletion.'}</div>
                 )}
               </div>
 
@@ -2792,8 +2859,19 @@ export default function OwnerPanel() {
         <div className="flex flex-wrap gap-2 mt-2 text-[10px]">
           <span className={`px-2 py-0.5 rounded-full ${approved ? 'bg-green-100 text-green-700' : declined ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{approved ? 'approved user' : declined ? 'declined' : 'pending approval'}</span>
           {u.is_verified && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">🔵 blue verified</span>}
+          {u.is_frozen && <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">❄️ frozen account</span>}
+          {isDeletionQueued(u) && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">🗓 queued for deletion</span>}
           {u.pending_profile_pic && <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">📷 photo change pending</span>}
         </div>
+
+        {isDeletionQueued(u) && (
+          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3">
+            <div className="text-sm font-extrabold text-amber-950">🗓 Scheduled account deletion · {deletionCountdown(u)}</div>
+            <p className="text-xs text-amber-900 mt-1">The user requested deletion, but all account data is still preserved during the seven-day recovery period.</p>
+            <div className="text-[10px] text-amber-800 mt-1">Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'} · Requested: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
+            {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account & Cancel Deletion</button>}
+          </div>
+        )}
 
         {/* Profile photo change request — owner approval required */}
         {u.pending_profile_pic && (
@@ -2912,9 +2990,13 @@ export default function OwnerPanel() {
               : "border border-sky-300 text-sky-700 bg-sky-50 hover:bg-sky-100 px-4 py-1.5 rounded-full text-xs font-semibold disabled:opacity-60"}>
             {u.is_frozen ? '🔥 Unfreeze User' : '❄️ Freeze User'}
           </button>
-          <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
+          {isDeletionQueued(u) ? (
+            u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account</button>
+          ) : (
+            <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
+          )}
         </div>
-        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice.</div>
+        <div className="text-[10px] text-gray-400 mt-2">Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice. Voluntary deletion requests keep all data for seven days and can be restored by the user or by you before the deadline.</div>
       </div>
     );
   }
