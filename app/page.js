@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK, ownerRest } from '@/lib/supabase';
+import { supabase, OWNER_EMAILS, DEFAULT_OWNER_SETTINGS, OWNER_PASSWORD_HASH_FALLBACK } from '@/lib/supabase';
 
 // 🖼 Ad media helpers — items can be plain strings OR priced objects { src, name, price }
 const isVidSrc = (m) => typeof m === 'string'
@@ -277,8 +277,9 @@ function CompareSelfie({ email, onZoom }) {
   const load = async () => {
     setPic(null);
     try {
-      const { data } = await supabase.from('users').select('profile_pic').eq('email', (email || '').toLowerCase()).single();
-      setPic(data?.profile_pic || '');
+      const { data } = await supabase.rpc('get_owner_users');
+      const user = (data || []).find((row) => (row.email || '').toLowerCase() === (email || '').toLowerCase());
+      setPic(user?.profile_pic || '');
     } catch { setPic(''); }
   };
   if (pic) return (
@@ -313,7 +314,6 @@ function currentWeekRange() {
 const USER_REF = 'payround-omega.vercel.app/signup?ref=';
 // Privacy-safe owner projection. Referral accounting and DOB privacy stay behind
 // dedicated owner/user RPCs instead of weakening column-level protections.
-const OWNER_USER_SELECT = 'id,email,name,phone,trial_used,role,created_at,is_verified,is_approved,approval_status,decline_reason,profile_pic,pending_profile_pic,id_front_url,id_back_url,gender,address,occupation,bio,bank_name,account_number,account_name,payment_remark,is_frozen';
 const EMPTY_REFERRAL_DASHBOARD = {
   stats: { relationship_count: 0, unqualified_count: 0, pending_count: 0, awarded_count: 0, available_balance: 0, lifetime_earned: 0, paid_out: 0 },
   referrers: [],
@@ -638,6 +638,7 @@ export default function OwnerPanel() {
   }, []);
 
   useEffect(() => {
+    if (!isOwner) return;
     (async () => {
       try {
         const { data: s } = await supabase.from('owner_settings').select('*').eq('id', 1).single();
@@ -662,7 +663,7 @@ export default function OwnerPanel() {
         }
       } catch {}
     })();
-  }, []);
+  }, [isOwner]);
 
   useEffect(() => {
     if (!isOwner) return undefined;
@@ -736,18 +737,27 @@ export default function OwnerPanel() {
         return [];
       }
     };
-    setGroups(await safe(supabase.from('groups').select('*').order('created_at', { ascending: false }), 'Groups'));
-    // Users list — only non-sensitive columns. Referral/DOB data comes from protected RPCs.
-    {
-      const rq = await ownerRest(`users?select=${OWNER_USER_SELECT}&order=created_at.desc`, { session });
-      if (rq.error) issues.push(`Users failed to load: ${rq.error.message}`);
-      else setUsersList(Array.isArray(rq.data) ? rq.data : []);
-    }
-    // Full privacy-safe rows for users who have a pending photo change.
-    {
-      const pend = await safe(supabase.from('users').select(OWNER_USER_SELECT).not('pending_profile_pic', 'is', null).order('created_at', { ascending: false }), 'Photo requests');
-      setPhotoPendingUsers(pend);
-    }
+    // Archive first, then load ads so an expired approved ad cannot remain visible
+    // in this refresh from a stale pre-archive result.
+    const archiveResult = await supabase.rpc('archive_expired_ads');
+    if (archiveResult.error) issues.push(`Expired ads failed to archive: ${archiveResult.error.message}`);
+    const [groupsResult, usersResult, membersResult, adsResult] = await Promise.all([
+      supabase.rpc('get_owner_groups'),
+      supabase.rpc('get_owner_users'),
+      supabase.rpc('get_owner_members'),
+      supabase.rpc('get_owner_ads'),
+    ]);
+    const ownerGroups = Array.isArray(groupsResult.data) ? groupsResult.data : [];
+    const ownerUsers = Array.isArray(usersResult.data) ? usersResult.data : [];
+    const ownerMembers = Array.isArray(membersResult.data) ? membersResult.data : [];
+    const ownerAds = Array.isArray(adsResult.data) ? adsResult.data : [];
+    if (groupsResult.error) issues.push(`Groups failed to load: ${groupsResult.error.message}`);
+    if (usersResult.error) issues.push(`Users failed to load: ${usersResult.error.message}`);
+    if (membersResult.error) issues.push(`Members failed to load: ${membersResult.error.message}`);
+    if (adsResult.error) issues.push(`Ads failed to load: ${adsResult.error.message}`);
+    setGroups(ownerGroups);
+    setUsersList(ownerUsers);
+    setPhotoPendingUsers(ownerUsers.filter((user) => !!user.pending_profile_pic));
     // Auto-cleanup: purge notifications older than 60 days (keeps the database tidy)
     try {
       const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
@@ -755,17 +765,12 @@ export default function OwnerPanel() {
       // Also purge READ direct messages older than 60 days
       await supabase.from('messages').delete().eq('read', true).lt('created_at', cutoff);
     } catch {}
-    setMembers(await safe(supabase.from('members').select('*')));
+    setMembers(ownerMembers);
     setGroupReviews(await safe(supabase.from('group_reviews').select('*').order('created_at', { ascending: false })));
     setMemberReviews(await safe(supabase.from('member_reviews').select('*').order('created_at', { ascending: false })));
     setVerifyRequests(await safe(supabase.from('verification_requests').select('*').order('created_at', { ascending: false })));
-    // ⌛ AUTO-CLEAR: ads whose paid run ended 24h+ ago drop off this panel (archived — the advertiser
-    // keeps the ad + its analytics in My Ads; the site feed already hides it the moment it expires)
-    try {
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      await supabase.from('ads').update({ status: 'archived' }).eq('status', 'approved').lt('expires_at', cutoff);
-    } catch {}
-    setAds(await safe(supabase.from('ads').select('*')));
+    // Ads were archived before the owner-wide read above, so this state is current.
+    setAds(ownerAds);
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
     setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
     // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
@@ -774,7 +779,7 @@ export default function OwnerPanel() {
     // Owner-only RPC provides every relationship, qualification, award and cash payout
     // without granting broad SELECT access to private user columns.
     {
-      const rq = await ownerRest('rpc/get_owner_referral_dashboard', { method: 'POST', body: {}, session });
+      const rq = await supabase.rpc('get_owner_referral_dashboard');
       if (rq.error) issues.push(`Referral activity failed to load: ${rq.error.message}`);
       else setReferralDashboard(rq.data || EMPTY_REFERRAL_DASHBOARD);
     }
@@ -801,12 +806,11 @@ export default function OwnerPanel() {
     setReferralPayoutForms(prev => ({ ...prev, [referrer.user_id]: { ...form, requestId } }));
     setReferralBusyId(referrer.user_id); setErr(''); setMsg('');
     try {
-      const got = await supabase.auth.getSession();
-      const session = got?.data?.session;
-      const { data, error } = await ownerRest('rpc/owner_pay_referral_bonus', {
-        method: 'POST',
-        body: { p_user_id: referrer.user_id, p_amount: amount, p_note: note || null, p_request_id: requestId },
-        session,
+      const { data, error } = await supabase.rpc('owner_pay_referral_bonus', {
+        p_user_id: referrer.user_id,
+        p_amount: amount,
+        p_note: note || null,
+        p_request_id: requestId,
       });
       if (error) throw error;
       setReferralPayoutForms(prev => ({ ...prev, [referrer.user_id]: { amount: '', note: '' } }));
@@ -830,9 +834,10 @@ export default function OwnerPanel() {
     setErr(''); setMsg('');
     setProfileView({ type: 'user', data: u, request, loadingFull: true });
     try {
-      const { data, error } = await supabase.from('users').select(OWNER_USER_SELECT).eq('id', u.id).single();
+      const { data, error } = await supabase.rpc('get_owner_users');
       if (error) throw error;
-      if (data) setProfileView({ type: 'user', data, request });
+      const full = (data || []).find((row) => String(row.id) === String(u.id));
+      if (full) setProfileView({ type: 'user', data: full, request });
     } catch (e) {
       setErr(`Could not load full profile: ${e.message}`);
     }
@@ -897,9 +902,7 @@ export default function OwnerPanel() {
     if (!window.confirm(`Take down ${u.name || em}?\n\nThey will see: “${why}”`)) return;
     setBusy(true); setErr(''); setMsg('');
     try {
-      const got = await supabase.auth.getSession();
-      const session = got?.data?.session;
-      const { data, error } = await ownerRest('rpc/owner_delete_user', { method: 'POST', body: { p_email: em, p_reason: why }, session });
+      const { data, error } = await supabase.rpc('owner_delete_user', { p_email: em, p_reason: why });
       if (error) throw error;
       setMsg(`Taken down ${em}. They are signed out and will see your reason if they try to log in.`);
       setProfileView(null);
@@ -913,9 +916,7 @@ export default function OwnerPanel() {
     if (!window.confirm(`Delete group "${g.name || g.id}" forever?\n\nMembers, chat, payments and the group page all go. This cannot be undone.`)) return;
     setBusy(true); setErr(''); setMsg('');
     try {
-      const got = await supabase.auth.getSession();
-      const session = got?.data?.session;
-      const { error } = await ownerRest('rpc/owner_delete_group', { method: 'POST', body: { p_group_id: String(g.id) }, session });
+      const { error } = await supabase.rpc('owner_delete_group', { p_group_id: String(g.id) });
       if (error) throw error;
       setMsg(`Deleted group "${g.name || g.id}".`);
       setProfileView(null);
@@ -1089,7 +1090,9 @@ export default function OwnerPanel() {
       if (error) throw error;
       if (verify) {
         if (req.subject_type === 'user' && req.user_email) {
-          await supabase.from('users').update({ is_verified: true }).eq('email', req.user_email);
+          const target = usersList.find((user) => (user.email || '').toLowerCase() === req.user_email.toLowerCase());
+          if (!target) throw new Error('Verification user profile was not found');
+          await supabase.from('users').update({ is_verified: true }).eq('id', target.id);
         } else if (req.group_id) {
           await supabase.from('groups').update({ is_verified: true }).eq('id', req.group_id);
         }
@@ -1283,17 +1286,15 @@ export default function OwnerPanel() {
     // 👤 load this chatter's profile so you can see WHO you're helping, mid-chat
     try {
       const em = (th.user_email || '').toLowerCase();
-      const { data: urow } = await supabase.from('users').select(OWNER_USER_SELECT).ilike('email', em).maybeSingle();
-      let memberOf = 0, adminOf = 0;
-      try {
-        const { count: mc } = await supabase.from('members').select('id', { count: 'exact', head: true }).eq('member_email', em).eq('status', 'approved');
-        memberOf = mc || 0;
-      } catch {}
-      try {
-        const { count: ac } = await supabase.from('groups').select('id', { count: 'exact', head: true }).eq('admin_email', em);
-        adminOf = ac || 0;
-      } catch {}
-      setSupProfile({ user: urow || null, memberOf, adminOf });
+      const [{ data: ownerUsers }, { data: ownerMembers }, { data: ownerGroups }] = await Promise.all([
+        supabase.rpc('get_owner_users'),
+        supabase.rpc('get_owner_members'),
+        supabase.rpc('get_owner_groups'),
+      ]);
+      const urow = (ownerUsers || []).find((row) => (row.email || '').toLowerCase() === em) || null;
+      const memberOf = (ownerMembers || []).filter((row) => (row.member_email || '').toLowerCase() === em && row.status === 'approved').length;
+      const adminOf = (ownerGroups || []).filter((row) => (row.admin_email || '').toLowerCase() === em).length;
+      setSupProfile({ user: urow, memberOf, adminOf });
     } catch { setSupProfile({ user: null, memberOf: 0, adminOf: 0 }); }
     setSupProfileLoading(false);
   };
@@ -1305,9 +1306,10 @@ export default function OwnerPanel() {
     const em = (activeSupport.user_email || '').toLowerCase();
     setBusy(true); setErr(''); setMsg('');
     try {
-      const { data, error } = await supabase.from('users').select(OWNER_USER_SELECT).ilike('email', em).maybeSingle();
+      const { data, error } = await supabase.rpc('get_owner_users');
       if (error) throw error;
-      if (data) openUserProfile(data);
+      const found = (data || []).find((row) => (row.email || '').toLowerCase() === em);
+      if (found) openUserProfile(found);
       else setErr('No registered account profile found for this email yet.');
     } catch (e) { setErr(`Could not load profile: ${e.message}`); }
     setBusy(false);
