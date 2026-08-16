@@ -14,8 +14,8 @@ function adsMediaOf(a) {
 const fmtODay = (iso) => { try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; }; };
 const fmtODayShort = (d) => { try { return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch { return d; }; };
 
-// 📊 raw ad_events rows → rich stats (totals, PEOPLE = accounts + guest devices, per-media, per-day, tap-through)
-// Legacy rows have viewer=null; new rows always carry account email or 'g:<device-id>' for guests.
+// 📊 Protected ad-event RPC rows → privacy-safe placement stats.
+// New viewers are pseudonymous a:<hash> accounts or g:<hash> guest devices; legacy null identities never become people.
 function aggAdEvents(rows) {
   const views = (rows || []).filter(r => r.kind === 'view');
   const clicks = (rows || []).filter(r => r.kind === 'click');
@@ -37,13 +37,16 @@ function aggAdEvents(rows) {
     if (!d) continue;
     byDay.set(d, (byDay.get(d) || 0) + 1);
   }
-  const peopleReached = people(views).size;
+  // A click is itself proof of placement reach. Union it with observed views so a
+  // very fast tap cannot yield an impossible tap rate above 100%.
+  const reached = [...views, ...clicks];
+  const peopleReached = people(reached).size;
   const uniqueClickers = people(clicks).size;
   return {
     totalViews: views.length,
     peopleReached,
-    accountsReached: accounts(views).size,
-    guestDevices: guestDevices(views).size,
+    accountsReached: accounts(reached).size,
+    guestDevices: guestDevices(reached).size,
     legacyGuests: legacyGuests(views),
     totalClicks: clicks.length,
     uniqueClickers,
@@ -129,8 +132,7 @@ function OwnerAdStats({ ad, onClose }) {
     let alive = true;
     (async () => {
       try {
-        const { data, error } = await supabase.from('ad_events')
-          .select('kind, media_index, viewer, created_at').eq('ad_id', String(ad.id)).limit(50000);
+        const { data, error } = await supabase.rpc('get_ad_analytics', { p_ad_id: String(ad.id) });
         if (!alive) return;
         if (error) { setState('error'); return; }
         if (!data || !data.length) { setState('empty'); return; }
@@ -184,10 +186,10 @@ function OwnerAdStats({ ad, onClose }) {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-2xl p-3.5" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
                   <p className="text-xl mb-0.5">👥</p>
-                  <p className="text-2xl font-black leading-none" style={{ color: '#047857' }}>{(stats.peopleReached + stats.legacyGuests).toLocaleString()}</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#047857' }}>{stats.peopleReached.toLocaleString()}</p>
                   <p className="text-[10px] font-bold mt-1" style={{ color: '#065f46' }}>PEOPLE REACHED</p>
                   <p className="text-[10px]" style={{ color: '#047857' }}>
-                    {stats.accountsReached > 0 ? `${stats.accountsReached} account${stats.accountsReached === 1 ? '' : 's'}` : 'no logged-in accounts yet'}{(stats.guestDevices + stats.legacyGuests) > 0 ? ` · ${stats.guestDevices + stats.legacyGuests} guest${(stats.guestDevices + stats.legacyGuests) === 1 ? '' : 's'}` : ''}
+                    {stats.accountsReached > 0 ? `${stats.accountsReached} account${stats.accountsReached === 1 ? '' : 's'}` : 'no logged-in accounts yet'}{stats.guestDevices > 0 ? ` · ${stats.guestDevices} guest device${stats.guestDevices === 1 ? '' : 's'}` : ''}
                   </p>
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
@@ -198,15 +200,15 @@ function OwnerAdStats({ ad, onClose }) {
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#fffbeb', border: '1px solid #fde68a' }}>
                   <p className="text-xl mb-0.5">👆</p>
-                  <p className="text-2xl font-black leading-none" style={{ color: '#b45309' }}>{(stats.uniqueClickers + stats.legacyClickGuests).toLocaleString()}</p>
-                  <p className="text-[10px] font-bold mt-1" style={{ color: '#92400e' }}>OPENED THE PAGE</p>
-                  <p className="text-[10px]" style={{ color: '#b45309' }}>people who tapped through to the business</p>
+                  <p className="text-2xl font-black leading-none" style={{ color: '#b45309' }}>{stats.uniqueClickers.toLocaleString()}</p>
+                  <p className="text-[10px] font-bold mt-1" style={{ color: '#92400e' }}>SPONSORED CLICKS</p>
+                  <p className="text-[10px]" style={{ color: '#b45309' }}>distinct people who tapped an ad action</p>
                 </div>
                 <div className="rounded-2xl p-3.5" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
                   <p className="text-xl mb-0.5">⚡</p>
                   <p className="text-2xl font-black leading-none" style={{ color: '#6d28d9' }}>{stats.tapRate}%</p>
                   <p className="text-[10px] font-bold mt-1" style={{ color: '#5b21b6' }}>TAP RATE</p>
-                  <p className="text-[10px]" style={{ color: '#6d28d9' }}>of viewers who opened the business page</p>
+                  <p className="text-[10px]" style={{ color: '#6d28d9' }}>known viewers who tapped a sponsored action</p>
                 </div>
               </div>
               {stats.perMedia.length > 0 && (
@@ -259,7 +261,7 @@ function OwnerAdStats({ ad, onClose }) {
                   </div>
                 </div>
               )}
-              <p className="text-[10px] leading-relaxed text-gray-500">👀 The advertiser unlocks this exact report in My Ads → 📊 View Analytics once the ad's run ends.</p>
+              <p className="text-[10px] leading-relaxed text-gray-500">👀 Views are confirmed on-screen sponsored appearances. Reach uses distinct pseudonymous accounts and guest devices; legacy identity-less rows remain views, not guessed people. Clicks come only from sponsored placements, never ordinary business-profile visits. The advertiser unlocks this report after the run ends.</p>
               <button onClick={onClose} className="w-full text-sm font-extrabold py-3 rounded-xl text-white" style={{ background: '#0f172a' }}>Close</button>
             </>
           )}
@@ -532,6 +534,7 @@ export default function OwnerPanel() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isOwner, setIsOwner] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState(null);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -544,6 +547,8 @@ export default function OwnerPanel() {
 
   const [groups, setGroups] = useState([]);
   const [usersList, setUsersList] = useState([]);
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [presenceIssue, setPresenceIssue] = useState('');
   const [members, setMembers] = useState([]);
   const [groupReviews, setGroupReviews] = useState([]);
   const [memberReviews, setMemberReviews] = useState([]);
@@ -598,7 +603,40 @@ export default function OwnerPanel() {
     setSidebarOpen(false);
   };
 
-  // NOTE: login is NOT persisted — the owner panel always asks for the password
+  async function loadOnlineUsers() {
+    try {
+      const { data, error } = await supabase.rpc('get_owner_online_users');
+      if (error) throw error;
+      setOnlineUsers(Array.isArray(data) ? data : []);
+      setPresenceIssue('');
+    } catch (e) {
+      setPresenceIssue(e?.message || 'Online users could not load.');
+    }
+  }
+
+  // Supabase already persists/refreshes its session. Restore the owner UI only
+  // after validating that the authenticated email is one of the owner accounts.
+  useEffect(() => {
+    let alive = true;
+    const applySession = (session) => {
+      if (!alive) return;
+      const em = String(session?.user?.email || '').toLowerCase();
+      const valid = !!session && OWNER_EMAILS.includes(em);
+      setUser(valid ? { email: em, name: 'PayRound Owner' } : null);
+      setIsOwner(valid);
+      if (valid) setEmail(em);
+      setAuthReady(true);
+    };
+    supabase.auth.getSession()
+      .then(({ data }) => applySession(data?.session || null))
+      .catch(() => applySession(null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => applySession(session));
+    return () => {
+      alive = false;
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -637,6 +675,27 @@ export default function OwnerPanel() {
     const onVis = () => { if (!document.hidden) loadData(); };
     document.addEventListener('visibilitychange', onVis);
     return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis); };
+  }, [isOwner]);
+
+  // Presence uses both a short fallback poll and Realtime invalidation. The RPC
+  // applies the 75-second online threshold and reveals rows to owners only.
+  useEffect(() => {
+    if (!isOwner) return undefined;
+    loadOnlineUsers();
+    const t = setInterval(() => {
+      if (!document.hidden) loadOnlineUsers();
+    }, 15000);
+    const channel = supabase
+      .channel('owner-user-presence')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_presence' }, () => loadOnlineUsers())
+      .subscribe();
+    const onVis = () => { if (!document.hidden) loadOnlineUsers(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+      supabase.removeChannel(channel);
+    };
   }, [isOwner]);
 
   // 📛 App icon badge — the installed owner app shows how many items need a decision
@@ -802,7 +861,7 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
-  /* ---------- AUTH (no persistence — password required every visit) ---------- */
+  /* ---------- AUTH (Supabase session persists across refreshes) ---------- */
   const handleLogin = async (e) => {
     e.preventDefault();
     setErr(''); setMsg('');
@@ -1319,6 +1378,16 @@ export default function OwnerPanel() {
   };
 
   /* ---------- LOGIN ---------- */
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-[#0f0f23] flex items-center justify-center p-4 text-white">
+        <div className="text-center">
+          <div className="w-10 h-10 rounded-full border-4 border-white/25 border-t-white animate-spin mx-auto mb-3" />
+          <p className="text-sm font-semibold">Restoring your secure owner session…</p>
+        </div>
+      </div>
+    );
+  }
   if (!isOwner) {
     return (
       <div className="min-h-screen bg-[#0f0f23] flex items-center justify-center p-4">
@@ -1326,7 +1395,7 @@ export default function OwnerPanel() {
           <div className="text-center mb-6">
             <img src="/images/logo-mark.png" alt="Payround" className="w-14 h-14 rounded-xl mx-auto mb-3 object-cover shadow" />
             <h1 className="text-xl font-bold">PayRound Owner</h1>
-            <p className="text-xs text-gray-500 mt-1">Admin control panel — password required every visit</p>
+            <p className="text-xs text-gray-500 mt-1">Admin control panel — secure owner session</p>
           </div>
           <form onSubmit={handleLogin} className="space-y-3">
             <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Owner Email" type="email" required className="w-full border rounded-xl px-4 py-3 text-sm" />
@@ -1730,6 +1799,41 @@ export default function OwnerPanel() {
                 <button onClick={loadData} className="shrink-0 text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">🔁 Refresh</button>
               </div>
 
+              {/* Private live presence: heartbeat is JWT-bound; only owner RPC/RLS can read it. */}
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <h4 className="text-sm font-extrabold text-emerald-950">🟢 Online now <span className="text-xs font-normal text-emerald-700">({onlineUsers.length})</span></h4>
+                    <p className="text-[10px] text-emerald-700">Live heartbeats · users disappear after about 75 seconds without activity</p>
+                  </div>
+                  <button onClick={loadOnlineUsers} className="shrink-0 text-[11px] font-bold border border-emerald-300 bg-white text-emerald-800 rounded-full px-3 py-1.5">Refresh</button>
+                </div>
+                {presenceIssue && <div className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-xl p-2 mb-2">Presence could not refresh: {presenceIssue}</div>}
+                {onlineUsers.length === 0 ? (
+                  <div className="text-xs text-emerald-800/70 border border-dashed border-emerald-200 bg-white/60 rounded-xl p-4 text-center">No user heartbeat is active right now.</div>
+                ) : (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {onlineUsers.map((online) => {
+                      const profile = usersList.find(u => String(u.id) === String(online.user_id));
+                      const seconds = Math.max(0, Math.floor((Date.now() - new Date(online.last_seen_at).getTime()) / 1000));
+                      return (
+                        <button key={online.user_id} type="button" onClick={() => profile && openUserProfile(profile)} disabled={!profile}
+                          className="text-left flex items-center gap-2.5 bg-white border border-emerald-100 rounded-xl p-2.5 hover:border-emerald-300 disabled:cursor-default">
+                          {online.profile_pic
+                            ? <img src={online.profile_pic} alt="" className="w-9 h-9 rounded-full object-cover border" />
+                            : <span className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center">{(online.name || online.email || 'U')[0].toUpperCase()}</span>}
+                          <span className="min-w-0">
+                            <span className="block text-xs font-bold text-gray-900 truncate">{online.name || 'PayRound user'} {online.is_verified && <BlueBadge />}</span>
+                            <span className="block text-[10px] text-gray-500 truncate">{online.email}</span>
+                            <span className="block text-[9px] font-semibold text-emerald-700">active {seconds < 5 ? 'just now' : `${seconds}s ago`}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {/* Search users (name, email, or unique ID) */}
               <input
                 value={userSearch}
@@ -2113,10 +2217,7 @@ export default function OwnerPanel() {
                             <button disabled={busy} onClick={() => reviewBiz(a, 'approved')} className="bg-black hover:bg-gray-800 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">✔ Approve → Public</button>
                           )}
                           {bizTab === 'approved' && (
-                            <>
-                              <button onClick={() => setAdStatsFor(a)} className="text-[11px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-3 py-1.5 rounded-full hover:bg-violet-100">📊 Analytics</button>
-                              <button disabled={busy} onClick={() => reviewBiz(a, 'hidden')} className="border border-gray-300 text-gray-600 hover:bg-gray-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">🙈 Hide from public</button>
-                            </>
+                            <button disabled={busy} onClick={() => reviewBiz(a, 'hidden')} className="border border-gray-300 text-gray-600 hover:bg-gray-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">🙈 Hide from public</button>
                           )}
                           {bizTab === 'pending' && (
                             <button disabled={busy} onClick={() => reviewBiz(a, 'hidden')} className="border border-gray-300 text-gray-600 hover:bg-gray-50 px-4 py-1.5 rounded-full text-xs disabled:opacity-60">🙈 Hide</button>
