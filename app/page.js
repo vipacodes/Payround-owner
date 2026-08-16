@@ -516,6 +516,7 @@ const MENU = [
   { id: 'businesses', icon: '🏪', label: 'Businesses' },
   { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'support', icon: '💬', label: 'Support Chats' },
+  { id: 'reports', icon: '🚩', label: 'Private Reports' },
   { id: 'bank', icon: '🏦', label: 'Bank Details' },
   { id: 'referral', icon: '🎁', label: 'Referral Activity' },
   { id: 'settings', icon: '⚙️', label: 'Settings' },
@@ -586,6 +587,10 @@ export default function OwnerPanel() {
   const [moneyPeriod, setMoneyPeriod] = useState('month');
   // 💬 Support chats with users (+ the bot holds the fort while you're offline)
   const [supportThreads, setSupportThreads] = useState([]);
+  const [reports, setReports] = useState([]);
+  const [reportsSub, setReportsSub] = useState('pending');
+  const [reportNotes, setReportNotes] = useState({});
+  const [reportBusyId, setReportBusyId] = useState(null);
   const [activeSupport, setActiveSupport] = useState(null);
   const [supportMsgs, setSupportMsgs] = useState([]);
   const [supReply, setSupReply] = useState('');
@@ -708,13 +713,14 @@ export default function OwnerPanel() {
         verifyRequests.filter(r => r.status === 'pending').length +
         photoPendingUsers.length +
         editRequests.filter(r => r.status === 'pending').length +
-        supportThreads.filter(t => !t.owner_read).length;
+        supportThreads.filter(t => !t.owner_read).length +
+        reports.filter(r => r.status === 'pending').length;
       if ('setAppBadge' in navigator) {
         if (total > 0) navigator.setAppBadge(total).catch(() => {});
         else if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
       }
     } catch {}
-  }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests, supportThreads]);
+  }, [groups, usersList, verifyRequests, photoPendingUsers, editRequests, supportThreads, reports]);
 
   const loadData = async () => {
     let session = null;
@@ -773,6 +779,7 @@ export default function OwnerPanel() {
     setAds(ownerAds);
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
     setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
+    setReports(await safe(supabase.rpc('get_owner_reports'), 'Private reports'));
     // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
     setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false }), 'Payments'));
     setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false }), 'Group payouts'));
@@ -979,8 +986,9 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('users').update({ is_approved: true, approval_status: 'approved' }).eq('id', u.id);
       if (error) throw error;
-      await notify('user_approved', null, `Welcome! Your PayRound account has been approved.`, u.email);
-      setMsg(`${u.name || u.email} approved (active user). 🔵 Blue badge is only granted from the Verification tab.`);
+      // Database trigger inserts the private approval notice in this same transaction.
+      // If that notice cannot be stored, this update fails and approval is rolled back.
+      setMsg(`${u.name || u.email} approved and privately notified (active user). 🔵 Blue badge is only granted from the Verification tab.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Approve failed: ${e.message}. If it mentions "is_approved", run the v1.3 migration SQL.`); }
     setBusy(false);
@@ -993,8 +1001,8 @@ export default function OwnerPanel() {
     try {
       const { error } = await supabase.from('users').update({ is_approved: false, approval_status: 'declined', decline_reason: reason }).eq('id', u.id);
       if (error) throw error;
-      await notify('user_declined', null, `Your account approval was declined: ${reason}. You may contact support.`, u.email);
-      setMsg(`${u.name || u.email} declined.`);
+      // The database stores the private decline notice atomically with this change.
+      setMsg(`${u.name || u.email} declined and privately notified.`);
       setProfileView(null); loadData();
     } catch (e) { setErr(`Decline failed: ${e.message}. If it mentions "approval_status", run the v1.3 migration SQL.`); }
     setBusy(false);
@@ -1002,21 +1010,89 @@ export default function OwnerPanel() {
 
   /* ---------- ❄️ FREEZE / 🔥 UNFREEZE (users & groups) — frozen things pause instantly on the user site ---------- */
   const freezeUser = async (u, freeze) => {
+    let userReason = null;
+    let adminNote = null;
+    if (freeze) {
+      userReason = window.prompt(
+        `Private reason for ${u.name || u.email}:\n\nOnly this user and PayRound can see it. Be clear about what must be resolved.`,
+        u.freeze_reason_user || 'PayRound is reviewing an account or payment concern linked to your activity.'
+      );
+      if (userReason === null) return;
+      userReason = userReason.trim();
+      if (!userReason) { setErr('A private reason for the frozen user is required.'); return; }
+
+      adminNote = window.prompt(
+        `Admin-safe explanation for group admins:\n\nDo not include private evidence or reporter identity. Group admins see this beside the frozen member.`,
+        u.freeze_admin_note || 'PayRound is reviewing this account. Keep private chat open only to resolve existing group or payment matters.'
+      );
+      if (adminNote === null) return;
+      adminNote = adminNote.trim();
+      if (!adminNote) { setErr('A separate admin-safe explanation is required.'); return; }
+
+      if (!window.confirm(
+        `Freeze ${u.name || u.email}?\n\nThe user will see the private reason. Their approved-group admins will see only the admin-safe explanation. They can message only those admins and PayRound Support.`
+      )) return;
+    } else if (!window.confirm(`Unfreeze ${u.name || u.email} and restore normal account access?`)) return;
+
     setBusy(true); setErr(''); setMsg('');
     try {
-      const { error } = await supabase.from('users').update({ is_frozen: freeze }).eq('id', u.id);
+      const { data, error } = await supabase.rpc('owner_set_user_freeze', {
+        p_user_id: u.id,
+        p_frozen: freeze,
+        p_user_reason: userReason,
+        p_admin_note: adminNote,
+      });
       if (error) throw error;
       // The database trigger creates the personal notice in the same transaction as
       // this state change, so a successful freeze/unfreeze can never silently miss it.
       setMsg(freeze
-        ? `❄️ ${u.name || u.email} is now FROZEN — their app is blocked and they were notified.`
+        ? `❄️ ${u.name || u.email} is now FROZEN — private and admin-safe explanations were saved, and the user was notified.`
         : `🔥 ${u.name || u.email} is unfrozen — they were notified that access is restored.`);
       if (profileView?.type === 'user' && String(profileView.data?.id) === String(u.id)) {
-        setProfileView({ ...profileView, data: { ...profileView.data, is_frozen: freeze } });
+        setProfileView({
+          ...profileView,
+          data: {
+            ...profileView.data,
+            is_frozen: freeze,
+            freeze_reason_user: freeze ? userReason : profileView.data.freeze_reason_user,
+            freeze_admin_note: freeze ? adminNote : profileView.data.freeze_admin_note,
+            frozen_at: data?.frozen_at || profileView.data.frozen_at,
+          },
+        });
       }
-      loadData();
+      await loadData();
     } catch (e) { setErr(`Freeze failed: ${e.message}`); }
     setBusy(false);
+  };
+
+  const reviewReport = async (report, status) => {
+    const note = String(reportNotes[report.id] ?? report.owner_note ?? '').trim();
+    const labels = { reviewed: 'mark as reviewed', resolved: 'resolve', dismissed: 'dismiss', pending: 'return to pending' };
+    if (!window.confirm(`${labels[status] || 'update'} this private report?\n\nNo notification will be sent to the reporter or the reported ${report.target_type}.`)) return;
+    setReportBusyId(report.id); setErr(''); setMsg('');
+    try {
+      const { error } = await supabase.rpc('owner_review_report', {
+        p_report_id: report.id,
+        p_status: status,
+        p_owner_note: note || null,
+      });
+      if (error) throw error;
+      setMsg(`Private report ${status}. No report-status notification was sent to either party.`);
+      await loadData();
+    } catch (e) { setErr(`Report review failed: ${e.message}`); }
+    setReportBusyId(null);
+  };
+
+  const openReportedTarget = (report) => {
+    if (report.target_type === 'user') {
+      const target = usersList.find(u => String(u.id) === String(report.target_ref));
+      if (target) openUserProfile(target);
+      else setErr('The reported user profile is no longer available. The report remains in the private audit queue.');
+      return;
+    }
+    const target = groups.find(g => String(g.id) === String(report.target_ref));
+    if (target) setProfileView({ type: 'group', data: target });
+    else setErr('The reported group is no longer available. The report remains in the private audit queue.');
   };
 
   const freezeGroup = async (g, freeze) => {
@@ -1575,7 +1651,8 @@ export default function OwnerPanel() {
         {menuBtn(MENU[6], bizPendingCount)}
         {menuBtn(MENU[7])}
         {menuBtn(MENU[8], supportThreads.filter(t => !t.owner_read).length)}
-        {MENU.slice(9).map(m => menuBtn(m))}
+        {menuBtn(MENU[9], reports.filter(r => r.status === 'pending').length)}
+        {MENU.slice(10).map(m => menuBtn(m))}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -2422,7 +2499,96 @@ export default function OwnerPanel() {
             </div>
           )}
 
-          {/* 7. BANK DETAILS */}
+          {/* 🚩 PRIVATE REPORT REVIEW — owner-only RPC; never exposed to either party */}
+          {activeMenu === 'reports' && (() => {
+            const pendingCount = reports.filter(r => r.status === 'pending').length;
+            const visibleReports = reportsSub === 'all' ? reports : reports.filter(r => r.status === reportsSub);
+            return (
+              <div className="space-y-4">
+                <div className="bg-white rounded-xl border p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold">🚩 Private Report Review Queue</h3>
+                      <p className="text-xs text-gray-500 mt-1 max-w-3xl">Only PayRound can read these reports, reporter identities, evidence, owner notes, or review status. Reviewing, resolving, or dismissing a report sends <b>no status notification</b> to the reporter or the reported user/group.</p>
+                    </div>
+                    <span className={`text-xs font-extrabold px-3 py-1.5 rounded-full ${pendingCount ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>{pendingCount} pending</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    {[
+                      ['pending', '⏳ Pending', pendingCount],
+                      ['reviewed', '👁 Reviewed', reports.filter(r => r.status === 'reviewed').length],
+                      ['resolved', '✅ Resolved', reports.filter(r => r.status === 'resolved').length],
+                      ['dismissed', '✖ Dismissed', reports.filter(r => r.status === 'dismissed').length],
+                      ['all', 'All', reports.length],
+                    ].map(([id, label, count]) => (
+                      <button key={id} onClick={() => setReportsSub(id)} className={`text-xs font-bold px-3 py-1.5 rounded-full border ${reportsSub === id ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>{label} ({count})</button>
+                    ))}
+                  </div>
+                </div>
+
+                {visibleReports.length === 0 ? (
+                  <div className="bg-white rounded-xl border border-dashed p-12 text-center text-sm text-gray-500">No {reportsSub === 'all' ? '' : reportsSub} private reports.</div>
+                ) : visibleReports.map(report => {
+                  const targetUser = report.target_type === 'user' ? usersList.find(u => String(u.id) === String(report.target_ref)) : null;
+                  const targetGroup = report.target_type === 'group' ? groups.find(g => String(g.id) === String(report.target_ref)) : null;
+                  const targetExists = !!(targetUser || targetGroup);
+                  return (
+                    <div key={report.id} className={`bg-white rounded-xl border p-5 ${report.status === 'pending' ? 'border-red-200 shadow-sm' : 'border-gray-200'}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${report.status === 'pending' ? 'bg-red-100 text-red-700' : report.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : report.status === 'dismissed' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-700'}`}>{report.status}</span>
+                            <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{report.target_type}</span>
+                            <span className="text-[10px] text-gray-400">{report.created_at ? new Date(report.created_at).toLocaleString() : ''}</span>
+                          </div>
+                          <h4 className="font-extrabold text-gray-900 mt-2 break-words">Reported: {report.target_label || report.target_ref}</h4>
+                          <p className="text-[11px] font-mono text-gray-400 break-all">Target ID: {report.target_ref}</p>
+                        </div>
+                        <button onClick={() => openReportedTarget(report)} disabled={!targetExists} className="text-xs font-bold border rounded-full px-3 py-1.5 bg-white hover:bg-gray-50 disabled:opacity-50">{targetExists ? '👁 Open reported profile' : 'Target removed'}</button>
+                      </div>
+
+                      <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(230px,0.45fr)] gap-4 mt-4">
+                        <div className="space-y-3">
+                          <div className="rounded-xl bg-red-50 border border-red-100 p-3">
+                            <div className="text-[10px] font-extrabold tracking-wide text-red-700 uppercase">{String(report.category || 'other').replaceAll('_', ' ')}</div>
+                            <p className="text-sm text-gray-800 whitespace-pre-wrap break-words mt-1">{report.details}</p>
+                          </div>
+                          <div className="rounded-xl bg-purple-50 border border-purple-100 p-3">
+                            <div className="text-[10px] font-extrabold text-purple-700">REPORTER — PAYROUND ONLY</div>
+                            <div className="mt-2 flex items-center gap-2">
+                              {report.reporter_profile_pic ? <img src={report.reporter_profile_pic} alt="" className="w-9 h-9 rounded-full object-cover border" /> : <span className="w-9 h-9 rounded-full bg-purple-700 text-white flex items-center justify-center text-xs font-bold">{(report.reporter_name || report.reporter_email || 'R')[0].toUpperCase()}</span>}
+                              <div className="min-w-0"><p className="text-xs font-bold text-gray-900 truncate">{report.reporter_name || 'PayRound user'}</p><p className="text-[10px] text-gray-500 truncate">{report.reporter_email}</p></div>
+                            </div>
+                            <p className="text-[10px] text-purple-600 mt-2">Never disclose this identity to the reported user, group, or group admins.</p>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-extrabold text-gray-500">PRIVATE OWNER NOTE</label>
+                          <textarea
+                            rows={5}
+                            value={reportNotes[report.id] ?? report.owner_note ?? ''}
+                            onChange={e => setReportNotes(prev => ({ ...prev, [report.id]: e.target.value }))}
+                            placeholder="Evidence checked, action taken, follow-up…"
+                            className="w-full mt-1 border rounded-xl px-3 py-2 text-xs resize-y focus:outline-none focus:ring-2 focus:ring-purple-400"
+                          />
+                          {report.reviewed_at && <p className="text-[10px] text-gray-400 mt-1">Last reviewed {new Date(report.reviewed_at).toLocaleString()}{report.reviewed_by_email ? ` by ${report.reviewed_by_email}` : ''}</p>}
+                          <div className="grid grid-cols-2 gap-2 mt-3">
+                            {report.status !== 'reviewed' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'reviewed')} className="text-xs font-bold border border-amber-300 bg-amber-50 text-amber-800 rounded-lg py-2 disabled:opacity-50">👁 Reviewed</button>}
+                            {report.status !== 'resolved' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'resolved')} className="text-xs font-bold bg-emerald-600 text-white rounded-lg py-2 disabled:opacity-50">✓ Resolve</button>}
+                            {report.status !== 'dismissed' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'dismissed')} className="text-xs font-bold border border-gray-300 bg-gray-50 text-gray-700 rounded-lg py-2 disabled:opacity-50">✖ Dismiss</button>}
+                            {report.status !== 'pending' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'pending')} className="text-xs font-bold border border-red-200 bg-red-50 text-red-700 rounded-lg py-2 disabled:opacity-50">↩ Pending</button>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* BANK DETAILS */}
           {activeMenu === 'bank' && (
             <div className="bg-white rounded-xl border p-6 max-w-xl">
               <h3 className="font-bold mb-1">Bank Details</h3>
@@ -2921,6 +3087,23 @@ export default function OwnerPanel() {
             </div>
           </div>
         </div>
+
+        {u.is_frozen && (
+          <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-xs">
+            <div className="font-extrabold text-sky-900">❄️ FROZEN-ACCOUNT DETAILS — PAYROUND ONLY</div>
+            <div className="mt-3 grid md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-sky-200 bg-white p-3">
+                <div className="font-bold text-sky-800">Private reason shown to this user</div>
+                <p className="mt-1 text-gray-700 whitespace-pre-wrap">{u.freeze_reason_user || '—'}</p>
+              </div>
+              <div className="rounded-lg border border-sky-200 bg-white p-3">
+                <div className="font-bold text-sky-800">Admin-safe explanation shown to their group admins</div>
+                <p className="mt-1 text-gray-700 whitespace-pre-wrap">{u.freeze_admin_note || '—'}</p>
+              </div>
+            </div>
+            <p className="mt-2 text-[10px] text-sky-700">Frozen {u.frozen_at ? new Date(u.frozen_at).toLocaleString() : '—'}{u.frozen_by_email ? ` by ${u.frozen_by_email}` : ''}. Reporter identity and private report contents are never shown here to group admins or reported users.</p>
+          </div>
+        )}
 
         <div className="grid md:grid-cols-2 gap-5 mt-4">
           <div>
