@@ -514,10 +514,9 @@ const MENU = [
   { id: 'photo_requests', icon: '📷', label: 'Photo Requests' },
   { id: 'ads', icon: '📣', label: 'Ads' },
   { id: 'businesses', icon: '🏪', label: 'Businesses' },
-  { id: 'transactions', icon: '💳', label: 'Transactions' },
   { id: 'support', icon: '💬', label: 'Support Chats' },
   { id: 'reports', icon: '🚩', label: 'Private Reports' },
-  { id: 'bank', icon: '🏦', label: 'Bank Details' },
+  { id: 'bank', icon: '🏦', label: 'Bank & Transactions' },
   { id: 'referral', icon: '🎁', label: 'Referral Activity' },
   { id: 'settings', icon: '⚙️', label: 'Settings' },
   { id: 'announcements', icon: '📢', label: 'Announcements' },
@@ -588,6 +587,7 @@ export default function OwnerPanel() {
   // 💬 Support chats with users (+ the bot holds the fort while you're offline)
   const [supportThreads, setSupportThreads] = useState([]);
   const [reports, setReports] = useState([]);
+  const [reportTallies, setReportTallies] = useState([]); // 🚩 lifetime "times reported" per account — owner-only
   const [reportsSub, setReportsSub] = useState('pending');
   const [reportNotes, setReportNotes] = useState({});
   const [reportBusyId, setReportBusyId] = useState(null);
@@ -783,6 +783,7 @@ export default function OwnerPanel() {
     setEditRequests(await safe(supabase.from('group_edit_requests').select('*').order('created_at', { ascending: false })));
     setSupportThreads(await safe(supabase.from('support_threads').select('*').order('last_at', { ascending: false })));
     setReports(await safe(supabase.rpc('get_owner_reports'), 'Private reports'));
+    setReportTallies(await safe(supabase.rpc('get_owner_report_tallies'), 'Report tallies'));
     // Analytics feeds — light selects only (receipt/blob columns deliberately skipped so the panel stays fast)
     setPaymentsAll(await safe(supabase.from('payments').select('amount, status, created_at, reviewed_at').order('created_at', { ascending: false }), 'Payments'));
     setPayoutsAll(await safe(supabase.from('payouts').select('amount, status, created_at').order('created_at', { ascending: false }), 'Group payouts'));
@@ -1075,7 +1076,10 @@ export default function OwnerPanel() {
   const reviewReport = async (report, status) => {
     const note = String(reportNotes[report.id] ?? report.owner_note ?? '').trim();
     const labels = { reviewed: 'mark as reviewed', resolved: 'resolve', dismissed: 'dismiss', pending: 'return to pending' };
-    if (!window.confirm(`${labels[status] || 'update'} this private report?\n\nNo notification will be sent to the reporter or the reported ${report.target_type}.`)) return;
+    const dismissWarning = status === 'dismissed'
+      ? '\n\n⚠️ Dismissing PERMANENTLY DELETES this report from the queue. The private "times reported" tally for this account is kept.'
+      : '';
+    if (!window.confirm(`${labels[status] || 'update'} this private report?${dismissWarning}\n\nNo notification will be sent to the reporter or the reported ${report.target_type}.`)) return;
     setReportBusyId(report.id); setErr(''); setMsg('');
     try {
       const { error } = await supabase.rpc('owner_review_report', {
@@ -1084,7 +1088,9 @@ export default function OwnerPanel() {
         p_owner_note: note || null,
       });
       if (error) throw error;
-      setMsg(`Private report ${status}. No report-status notification was sent to either party.`);
+      setMsg(status === 'dismissed'
+        ? '✖ Report dismissed and permanently deleted from the queue. The lifetime report tally on the account is kept (visible only to you).'
+        : `Private report ${status}. No report-status notification was sent to either party.`);
       await loadData();
     } catch (e) { setErr(`Report review failed: ${e.message}`); }
     setReportBusyId(null);
@@ -1125,6 +1131,16 @@ export default function OwnerPanel() {
     const target = groups.find(g => String(g.id) === String(report.target_ref));
     if (target) setProfileView({ type: 'group', data: target });
     else setErr('The reported group is no longer available. The report remains in the private audit queue.');
+  };
+
+  // 👁 Open the REPORTER's full profile (owner-only — never reveal to the reported party)
+  const openReporterProfile = (report) => {
+    const reporter = usersList.find(u =>
+      (report.reporter_user_id && String(u.id) === String(report.reporter_user_id)) ||
+      (report.reporter_email && String(u.email || '').toLowerCase() === String(report.reporter_email).toLowerCase())
+    );
+    if (reporter) openUserProfile(reporter);
+    else setErr('The reporter profile is no longer available.');
   };
 
   const freezeGroup = async (g, freeze) => {
@@ -1693,17 +1709,19 @@ export default function OwnerPanel() {
 
       <nav className="flex-1 p-3 space-y-2 text-sm">
         <div className="text-[10px] text-white/40 px-3 mb-1 tracking-widest">MENU</div>
-        {menuBtn(MENU[0])}
-        {menuBtn(MENU[1], pendingGroups.length)}
-        {menuBtn(MENU[2], pendingUsers.length)}
-        {menuBtn(MENU[3], groupRequests.length + userRequests.length)}
-        {menuBtn(MENU[4], photoPendingUsers.length)}
-        {menuBtn(MENU[5], pendingAdsCount)}
-        {menuBtn(MENU[6], bizPendingCount)}
-        {menuBtn(MENU[7])}
-        {menuBtn(MENU[8], supportThreads.filter(t => !t.owner_read).length)}
-        {menuBtn(MENU[9], reports.filter(r => r.status === 'pending').length)}
-        {MENU.slice(10).map(m => menuBtn(m))}
+        {MENU.map(m => {
+          const badges = {
+            groups: pendingGroups.length,
+            users: pendingUsers.length,
+            verification: groupRequests.length + userRequests.length,
+            photo_requests: photoPendingUsers.length,
+            ads: pendingAdsCount,
+            businesses: bizPendingCount,
+            support: supportThreads.filter(t => !t.owner_read).length,
+            reports: reports.filter(r => r.status === 'pending').length,
+          };
+          return menuBtn(m, badges[m.id]);
+        })}
       </nav>
 
       <div className="p-3 border-t border-white/10 space-y-2">
@@ -2258,39 +2276,6 @@ export default function OwnerPanel() {
           )}
 
           {/* 6. TRANSACTIONS */}
-          {activeMenu === 'transactions' && (
-            <div className="bg-white rounded-xl border p-4 sm:p-6">
-              <h3 className="font-bold mb-1">Transactions</h3>
-              <p className="text-xs text-gray-500 mb-4">Owner income from group fees, renewals and ads, together with referral-bonus expenses. Tap a row to view its details or receipt.</p>
-
-              <div className="grid grid-cols-2 gap-3 mb-5">
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 sm:p-4 text-left">
-                  <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-emerald-700">Total Income</div>
-                  <div className="text-lg sm:text-2xl font-extrabold text-emerald-600 mt-1">₦{totalIncome.toLocaleString()}</div>
-                </div>
-                <div className="rounded-xl border border-red-200 bg-red-50 p-3 sm:p-4 text-right">
-                  <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-red-700">Total Expense</div>
-                  <div className="text-lg sm:text-2xl font-extrabold text-red-600 mt-1">₦{totalExpense.toLocaleString()}</div>
-                </div>
-              </div>
-
-              {transactions.length > 0 ? transactions.map(t => {
-                const isExpense = t.direction === 'expense';
-                return (
-                  <button key={t.id} onClick={() => setReceiptView(t)} className="w-full flex flex-nowrap justify-between items-center gap-3 border-b last:border-0 py-3 text-sm hover:bg-gray-50 text-left px-2 rounded-lg">
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{t.type} — {t.name}</div>
-                      <div className="text-xs text-gray-500 truncate">{isExpense ? `Paid to ${t.to || t.name}` : t.from} • {t.date ? new Date(t.date).toLocaleString() : 'No date'}</div>
-                    </div>
-                    <div className={`font-extrabold shrink-0 ${isExpense ? 'text-red-600' : 'text-emerald-600'}`}>
-                      {isExpense ? '−' : '+'}₦{Number(t.amount || 0).toLocaleString()}
-                    </div>
-                  </button>
-                );
-              }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No transactions yet. Payments to {bankDetails.bankName} {bankDetails.accountNumber} will show here automatically.</div>}
-            </div>
-          )}
-
           {activeMenu === 'ads' && (
             <div className="bg-white rounded-xl border p-6">
               <h3 className="font-bold mb-1">📢 Ads</h3>
@@ -2567,7 +2552,7 @@ export default function OwnerPanel() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="font-bold">🚩 Private Report Review Queue</h3>
-                      <p className="text-xs text-gray-500 mt-1 max-w-3xl">Only PayRound can read these reports, reporter identities, evidence, owner notes, or review status. Reviewing, resolving, or dismissing a report sends <b>no status notification</b> to the reporter or the reported user/group.</p>
+                      <p className="text-xs text-gray-500 mt-1 max-w-3xl">Only PayRound can read these reports, reporter identities, evidence, owner notes, review status, or how many times an account has been reported. Reviewing or resolving sends <b>no status notification</b> to either party. <b>Dismissing permanently deletes the report</b> — the private lifetime "times reported" tally on the account is kept.</p>
                     </div>
                     <span className={`text-xs font-extrabold px-3 py-1.5 rounded-full ${pendingCount ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>{pendingCount} pending</span>
                   </div>
@@ -2576,7 +2561,6 @@ export default function OwnerPanel() {
                       ['pending', '⏳ Pending', pendingCount],
                       ['reviewed', '👁 Reviewed', reports.filter(r => r.status === 'reviewed').length],
                       ['resolved', '✅ Resolved', reports.filter(r => r.status === 'resolved').length],
-                      ['dismissed', '✖ Dismissed', reports.filter(r => r.status === 'dismissed').length],
                       ['all', 'All', reports.length],
                     ].map(([id, label, count]) => (
                       <button key={id} onClick={() => setReportsSub(id)} className={`text-xs font-bold px-3 py-1.5 rounded-full border ${reportsSub === id ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>{label} ({count})</button>
@@ -2601,8 +2585,14 @@ export default function OwnerPanel() {
                           </div>
                           <h4 className="font-extrabold text-gray-900 mt-2 break-words">Reported: {report.target_label || report.target_ref}</h4>
                           <p className="text-[11px] font-mono text-gray-400 break-all">Target ID: {report.target_ref}</p>
+                          <span className={`inline-block mt-1.5 text-[10px] font-extrabold px-2.5 py-1 rounded-full ${Number(report.target_total_reports || 1) > 1 ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                            🚩 Reported {Number(report.target_total_reports || 1)} time{Number(report.target_total_reports || 1) === 1 ? '' : 's'} in total — only you can see this
+                          </span>
                         </div>
-                        <button onClick={() => openReportedTarget(report)} disabled={!targetExists} className="text-xs font-bold border rounded-full px-3 py-1.5 bg-white hover:bg-gray-50 disabled:opacity-50">{targetExists ? '👁 Open reported profile' : 'Target removed'}</button>
+                        <div className="flex flex-col gap-2 items-stretch">
+                          <button onClick={() => openReportedTarget(report)} disabled={!targetExists} className="text-xs font-bold border rounded-full px-3 py-1.5 bg-white hover:bg-gray-50 disabled:opacity-50">{targetExists ? '👁 View reported profile' : 'Target removed'}</button>
+                          <button onClick={() => openReporterProfile(report)} className="text-xs font-bold border border-purple-200 text-purple-700 rounded-full px-3 py-1.5 bg-purple-50 hover:bg-purple-100">👁 View reporter profile</button>
+                        </div>
                       </div>
 
                       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(230px,0.45fr)] gap-4 mt-4">
@@ -2634,7 +2624,7 @@ export default function OwnerPanel() {
                           <div className="grid grid-cols-2 gap-2 mt-3">
                             {report.status !== 'reviewed' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'reviewed')} className="text-xs font-bold border border-amber-300 bg-amber-50 text-amber-800 rounded-lg py-2 disabled:opacity-50">👁 Reviewed</button>}
                             {report.status !== 'resolved' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'resolved')} className="text-xs font-bold bg-emerald-600 text-white rounded-lg py-2 disabled:opacity-50">✓ Resolve</button>}
-                            {report.status !== 'dismissed' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'dismissed')} className="text-xs font-bold border border-gray-300 bg-gray-50 text-gray-700 rounded-lg py-2 disabled:opacity-50">✖ Dismiss</button>}
+                            <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'dismissed')} className="text-xs font-bold border border-gray-300 bg-gray-50 text-gray-700 rounded-lg py-2 disabled:opacity-50" title="Permanently deletes this report. The lifetime tally is kept.">✖ Dismiss & Delete</button>
                             {report.status !== 'pending' && <button disabled={reportBusyId === report.id} onClick={() => reviewReport(report, 'pending')} className="text-xs font-bold border border-red-200 bg-red-50 text-red-700 rounded-lg py-2 disabled:opacity-50">↩ Pending</button>}
                           </div>
                         </div>
@@ -2689,15 +2679,50 @@ export default function OwnerPanel() {
 
           {/* BANK DETAILS */}
           {activeMenu === 'bank' && (
-            <div className="bg-white rounded-xl border p-6 max-w-xl">
-              <h3 className="font-bold mb-1">Bank Details</h3>
-              <p className="text-xs text-gray-500 mb-4">Shown to users whenever they need to pay you. Changes apply on the user site immediately.</p>
-              <div className="space-y-3">
-                <div><label className="text-xs font-bold">Bank Name</label><input value={bankDetails.bankName} onChange={e => setBankDetails({ ...bankDetails, bankName: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
-                <div><label className="text-xs font-bold">Account Number</label><input value={bankDetails.accountNumber} onChange={e => setBankDetails({ ...bankDetails, accountNumber: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
-                <div><label className="text-xs font-bold">Recipient's Name (Owner)</label><input value={bankDetails.accountName} onChange={e => setBankDetails({ ...bankDetails, accountName: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
+            <div className="space-y-5">
+              {/* 🏦 Bank details settings — always on top */}
+              <div className="bg-white rounded-xl border p-6 max-w-xl">
+                <h3 className="font-bold mb-1">Bank Details</h3>
+                <p className="text-xs text-gray-500 mb-4">Shown to users whenever they need to pay you. Changes apply on the user site immediately.</p>
+                <div className="space-y-3">
+                  <div><label className="text-xs font-bold">Bank Name</label><input value={bankDetails.bankName} onChange={e => setBankDetails({ ...bankDetails, bankName: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
+                  <div><label className="text-xs font-bold">Account Number</label><input value={bankDetails.accountNumber} onChange={e => setBankDetails({ ...bankDetails, accountNumber: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
+                  <div><label className="text-xs font-bold">Recipient's Name (Owner)</label><input value={bankDetails.accountName} onChange={e => setBankDetails({ ...bankDetails, accountName: e.target.value })} className="w-full border rounded-xl px-4 py-2 text-sm mt-1" /></div>
+                </div>
+                <button disabled={busy} onClick={saveBankDetails} className="mt-4 bg-black hover:bg-gray-800 text-white px-6 py-2 rounded-xl text-xs font-bold disabled:opacity-60">{busy ? 'Saving…' : 'Save Bank Details'}</button>
               </div>
-              <button disabled={busy} onClick={saveBankDetails} className="mt-4 bg-black hover:bg-gray-800 text-white px-6 py-2 rounded-xl text-xs font-bold disabled:opacity-60">{busy ? 'Saving…' : 'Save Bank Details'}</button>
+
+              {/* 💳 Transactions — below the bank details */}
+              <div className="bg-white rounded-xl border p-4 sm:p-6">
+                <h3 className="font-bold mb-1">💳 Transactions</h3>
+                <p className="text-xs text-gray-500 mb-4">Owner income from group fees, renewals and ads, together with referral-bonus expenses. Tap a row to view its details or receipt.</p>
+
+                <div className="grid grid-cols-2 gap-3 mb-5">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 sm:p-4 text-left">
+                    <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-emerald-700">Total Income</div>
+                    <div className="text-lg sm:text-2xl font-extrabold text-emerald-600 mt-1">₦{totalIncome.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 sm:p-4 text-right">
+                    <div className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-red-700">Total Expense</div>
+                    <div className="text-lg sm:text-2xl font-extrabold text-red-600 mt-1">₦{totalExpense.toLocaleString()}</div>
+                  </div>
+                </div>
+
+                {transactions.length > 0 ? transactions.map(t => {
+                  const isExpense = t.direction === 'expense';
+                  return (
+                    <button key={t.id} onClick={() => setReceiptView(t)} className="w-full flex flex-nowrap justify-between items-center gap-3 border-b last:border-0 py-3 text-sm hover:bg-gray-50 text-left px-2 rounded-lg">
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{t.type} — {t.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{isExpense ? `Paid to ${t.to || t.name}` : t.from} • {t.date ? new Date(t.date).toLocaleString() : 'No date'}</div>
+                      </div>
+                      <div className={`font-extrabold shrink-0 ${isExpense ? 'text-red-600' : 'text-emerald-600'}`}>
+                        {isExpense ? '−' : '+'}₦{Number(t.amount || 0).toLocaleString()}
+                      </div>
+                    </button>
+                  );
+                }) : <div className="text-center py-12 border border-dashed rounded-xl text-sm text-gray-500">No transactions yet. Payments to {bankDetails.bankName} {bankDetails.accountNumber} will show here automatically.</div>}
+              </div>
             </div>
           )}
 
@@ -3106,6 +3131,9 @@ export default function OwnerPanel() {
     const revs = userReviews(u);
     const approved = isUserApproved(u);
     const declined = isUserDeclined(u);
+    // 🚩 Lifetime "times reported" — visible ONLY on this owner dashboard.
+    const reportTally = (reportTallies || []).find(t => t.target_type === 'user' && String(t.target_ref) === String(u.id));
+    const timesReported = Number(reportTally?.total_reports || 0);
     return (
       <div>
         <div className="flex justify-between items-start gap-3">
@@ -3127,6 +3155,7 @@ export default function OwnerPanel() {
           {u.is_frozen && <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">❄️ frozen account</span>}
           {isDeletionQueued(u) && <span className={`px-2 py-0.5 rounded-full ${u.deletion_deleted_by === 'owner' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>{u.deletion_deleted_by === 'owner' ? '🚫 deleted by PayRound' : '🗓 deleted by user'}</span>}
           {u.pending_profile_pic && <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">📷 photo change pending</span>}
+          {timesReported > 0 && <span className={`px-2 py-0.5 rounded-full font-bold ${timesReported > 1 ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700'}`} title="Lifetime count — survives dismissed reports. Only you can see this.">🚩 reported {timesReported} time{timesReported === 1 ? '' : 's'}</span>}
         </div>
 
         {isDeletionQueued(u) && (
