@@ -2038,9 +2038,13 @@ export default function OwnerPanel() {
                 ) : usersSub === 'pending' ? (
                   pendingUsers.filter(matchUser).length > 0 ? pendingUsers.filter(matchUser).map(u => (
                     <div key={u.id} className={`border rounded-xl p-4 ${isUserDeclined(u) ? 'border-red-200 bg-red-50/40' : ''}`}>
-                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>}</div>
+                      <div className="font-medium text-sm">{u.name || '—'} {isUserDeclined(u) && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1">Declined</span>} {u.pending_profile_pic && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">📷 photo pending</span>} {u.referred_by && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-1">🎁 referred</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email} • Joined {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</div>
+                      {u.referred_by && (() => {
+                        const refUser = usersList.find(x => String(x.id) === String(u.referred_by) || String(x.id).slice(0, 8).toLowerCase() === String(u.referred_by).slice(0, 8).toLowerCase());
+                        return <div className="text-[11px] text-emerald-700 mt-1">🎁 Referred by: {refUser ? `${refUser.name || refUser.email} (${String(refUser.id).slice(0, 8)})` : String(u.referred_by).slice(0, 8)}</div>;
+                      })()}
                       {u.decline_reason && <div className="text-[11px] text-red-600 mt-1">Reason: {u.decline_reason}</div>}
                       <div className="flex flex-wrap gap-2 mt-2">
                         <button onClick={() => openUserProfile(u)} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
@@ -3216,7 +3220,12 @@ export default function OwnerPanel() {
             {infoRow('Role', u.role || 'member')}
             {infoRow('Joined', u.created_at ? new Date(u.created_at).toLocaleString() : '—')}
             {u.decline_reason && infoRow('Decline reason', u.decline_reason)}
-            {referredByAccount && infoRow('Referred by', `${referredByAccount.name || referredByAccount.email} (${String(referredByAccount.user_id).slice(0, 8)})`)}
+            {referredByAccount
+              ? infoRow('Referred by', `${referredByAccount.name || referredByAccount.email} (${String(referredByAccount.user_id).slice(0, 8)})`)
+              : u.referred_by && (() => {
+                  const refUser = usersList.find(x => String(x.id) === String(u.referred_by) || String(x.id).slice(0, 8).toLowerCase() === String(u.referred_by).slice(0, 8).toLowerCase());
+                  return infoRow('Referred by', refUser ? `${refUser.name || refUser.email} (${String(refUser.id).slice(0, 8)})` : String(u.referred_by).slice(0, 8));
+                })()}
           </div>
           <div>
             <div className="text-xs font-bold text-gray-500 mb-1">REFERRAL</div>
