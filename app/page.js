@@ -903,18 +903,22 @@ export default function OwnerPanel() {
       return;
     }
     const reason = window.prompt(
-      `Delete ${u.name || em} forever?\n\nThey are logged out immediately. If they try this email again they will see YOUR reason.\nThey can still create a new free account, or email payroundsupport@gmail.com.\n\nType the reason they will see:`,
+      `Delete ${u.name || em}?\n\nThe account goes into the PayRound delete queue for 7 days, then it is permanently deleted.\nIf they are online RIGHT NOW a full-screen warning freezes their app for 10 seconds and shows YOUR reason. If they are offline, they see it the moment they next log in.\nThey can contact PayRound support within the 7 days to ask you to restore the account.\n\nType the reason they will see (after "…deleted by the PayRound team due to:"):`,
       'This account broke PayRound rules.'
     );
     if (reason === null) return;
     const why = reason.trim();
-    if (!why) { setErr('A reason is required so the person knows why the account was taken down.'); return; }
-    if (!window.confirm(`Take down ${u.name || em}?\n\nThey will see: “${why}”`)) return;
+    if (!why) { setErr('A reason is required so the person knows why the account was deleted.'); return; }
+    if (!window.confirm(`Delete ${u.name || em}?\n\nThey will see: “Your account has been deleted by the PayRound team due to: ${why}”\n\nIt stays recoverable by YOU for 7 days in the 🗓 delete queue.`)) return;
     setBusy(true); setErr(''); setMsg('');
     try {
       const { data, error } = await supabase.rpc('owner_delete_user', { p_email: em, p_reason: why });
       if (error) throw error;
-      setMsg(`Taken down ${em}. They are signed out and will see your reason if they try to log in.`);
+      if (data?.queued) {
+        setMsg(`🗓 ${em} moved to the delete queue as “Deleted by PayRound”. Their screen shows your reason (with a 10-second freeze) now or at next login. Permanent deletion: ${data.delete_after ? new Date(data.delete_after).toLocaleString() : 'in 7 days'}. You can restore them from the Queued for Deletion tab until then.`);
+      } else {
+        setMsg(`Taken down ${em}. No PayRound profile existed, so the account was removed immediately.`);
+      }
       setProfileView(null);
       await loadData();
     } catch (e) { setErr(`Delete user failed: ${e.message}`); }
@@ -2059,14 +2063,17 @@ export default function OwnerPanel() {
                   )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No frozen accounts match "${userSearch}".` : 'No frozen accounts.'}</div>
                 ) : (
                   deletionQueuedUsers.filter(matchUser).length > 0 ? deletionQueuedUsers.filter(matchUser).map(u => (
-                    <div key={u.id} className="border border-amber-200 bg-amber-50/50 rounded-xl p-4">
-                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full ml-1">🗓 queued</span> {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>}</div>
+                    <div key={u.id} className={`border rounded-xl p-4 ${u.deletion_deleted_by === 'owner' ? 'border-red-200 bg-red-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
+                      <div className="font-medium text-sm">{u.name || '—'} {u.is_verified && <BlueBadge />} {u.deletion_deleted_by === 'owner'
+                        ? <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full ml-1 font-bold">🚫 Deleted by PayRound</span>
+                        : <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full ml-1 font-bold">🗓 Deleted by user</span>} {u.is_frozen && <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full ml-1">❄️ frozen</span>}</div>
                       <div className="text-[11px] text-purple-700 font-mono font-bold mt-0.5">ID: {refId(u)}</div>
                       <div className="text-xs text-gray-500">{u.email}</div>
-                      <div className="mt-2 rounded-lg border border-amber-200 bg-white/80 p-2.5">
+                      <div className={`mt-2 rounded-lg border bg-white/80 p-2.5 ${u.deletion_deleted_by === 'owner' ? 'border-red-200' : 'border-amber-200'}`}>
                         <div className={`text-xs font-extrabold ${u.deletion_can_restore ? 'text-amber-800' : 'text-red-700'}`}>{deletionCountdown(u)}</div>
                         <div className="text-[10px] text-gray-500 mt-0.5">Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'}</div>
-                        <div className="text-[10px] text-gray-400">Requested: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
+                        <div className="text-[10px] text-gray-400">{u.deletion_deleted_by === 'owner' ? 'Deleted by you' : 'Requested by user'}: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
+                        {u.deletion_deleted_by === 'owner' && u.deletion_reason && <div className="text-[10px] text-red-700 mt-1">Reason shown to them: “{u.deletion_reason}”</div>}
                       </div>
                       <div className="flex flex-wrap gap-2 mt-2">
                         <button onClick={() => openUserProfile(u)} className="text-xs border bg-white rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
@@ -3114,15 +3121,22 @@ export default function OwnerPanel() {
           <span className={`px-2 py-0.5 rounded-full ${approved ? 'bg-green-100 text-green-700' : declined ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{approved ? 'approved user' : declined ? 'declined' : 'pending approval'}</span>
           {u.is_verified && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">🔵 blue verified</span>}
           {u.is_frozen && <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">❄️ frozen account</span>}
-          {isDeletionQueued(u) && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">🗓 queued for deletion</span>}
+          {isDeletionQueued(u) && <span className={`px-2 py-0.5 rounded-full ${u.deletion_deleted_by === 'owner' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>{u.deletion_deleted_by === 'owner' ? '🚫 deleted by PayRound' : '🗓 deleted by user'}</span>}
           {u.pending_profile_pic && <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">📷 photo change pending</span>}
         </div>
 
         {isDeletionQueued(u) && (
-          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3">
-            <div className="text-sm font-extrabold text-amber-950">🗓 Scheduled account deletion · {deletionCountdown(u)}</div>
-            <p className="text-xs text-amber-900 mt-1">The user requested deletion, but all account data is still preserved during the seven-day recovery period.</p>
-            <div className="text-[10px] text-amber-800 mt-1">Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'} · Requested: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
+          <div className={`mt-4 rounded-xl border p-3 ${u.deletion_deleted_by === 'owner' ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50'}`}>
+            <div className={`text-sm font-extrabold ${u.deletion_deleted_by === 'owner' ? 'text-red-950' : 'text-amber-950'}`}>{u.deletion_deleted_by === 'owner' ? '🚫 Deleted by PayRound' : '🗓 Deleted by user'} · {deletionCountdown(u)}</div>
+            {u.deletion_deleted_by === 'owner' ? (
+              <>
+                <p className="text-xs text-red-900 mt-1">You deleted this account. The user sees a locked warning (10-second freeze) with your reason and a Contact Support button. All data stays preserved during the seven-day recovery period — only you can restore it.</p>
+                {u.deletion_reason && <div className="text-[11px] text-red-800 mt-1">Reason shown to them: “{u.deletion_reason}”</div>}
+              </>
+            ) : (
+              <p className="text-xs text-amber-900 mt-1">The user requested deletion, but all account data is still preserved during the seven-day recovery period.</p>
+            )}
+            <div className={`text-[10px] mt-1 ${u.deletion_deleted_by === 'owner' ? 'text-red-800' : 'text-amber-800'}`}>Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'} · {u.deletion_deleted_by === 'owner' ? 'Deleted' : 'Requested'}: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
             {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account & Cancel Deletion</button>}
           </div>
         )}
@@ -3268,10 +3282,10 @@ export default function OwnerPanel() {
           {isDeletionQueued(u) ? (
             u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account</button>
           ) : (
-            <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account Forever</button>
+            <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account (7-day queue)</button>
           )}
         </div>
-        <div className="text-[10px] text-gray-400 mt-2">The Support Chat button opens or creates this user's official PayRound Support conversation, including for frozen accounts. Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice. Voluntary deletion requests keep all data for seven days and can be restored by the user or by you before the deadline.</div>
+        <div className="text-[10px] text-gray-400 mt-2">The Support Chat button opens or creates this user's official PayRound Support conversation, including for frozen accounts. Approving activates the account. The 🔵 blue badge can be granted right here (only you see these buttons). Freezing immediately blocks app access and sends the user a private notification; unfreezing sends a restoration notice. Voluntary deletion requests keep all data for seven days and can be restored by the user or by you before the deadline. Deleting an account yourself also uses the 7-day queue (marked “Deleted by PayRound”): the user sees your reason on a locked warning screen (10-second freeze) and can only be restored by you.</div>
       </div>
     );
   }
