@@ -1102,10 +1102,6 @@ export default function OwnerPanel() {
     const text = String(form.message || '').trim();
     if (text.length < 2) { setErr('Type the custom notification before sending.'); return; }
     if (text.length > 1000) { setErr('Report follow-up notifications cannot exceed 1000 characters.'); return; }
-    const reportedLabel = report.target_type === 'group' ? "the reported group's admin" : 'the reported user';
-    const recipientLabel = audience === 'reporter' ? 'the reporter' : audience === 'reported' ? reportedLabel : `the reporter and ${reportedLabel}`;
-    const privacyWarning = audience === 'reporter' ? '' : '\n\nIMPORTANT: This text must not reveal the reporter identity or any private report evidence.';
-    if (!window.confirm(`Send this custom PayRound notification to ${recipientLabel}?${privacyWarning}\n\nThis is a deliberate message. Changing report status remains non-notifying.`)) return;
 
     setReportNoticeBusyId(report.id); setErr(''); setMsg('');
     try {
