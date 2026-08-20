@@ -2656,7 +2656,7 @@ export default function OwnerPanel() {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <div className="text-xs font-extrabold text-emerald-900">💬 SEND A CUSTOM FOLLOW-UP NOTIFICATION</div>
-                            <p className="text-[10px] text-emerald-800 mt-1">Manual and separate from review status. Nothing is sent until you type a message and press Send.</p>
+                            <p className="text-[10px] text-emerald-800 mt-1">Manual and separate from review status. Nothing is sent until you type a message and press Send. The text lands as a bell notification AND a real PayRound Support chat message (bot silenced), so they can reply to you directly.</p>
                           </div>
                           <select
                             value={reportNotices[report.id]?.audience || 'reporter'}
