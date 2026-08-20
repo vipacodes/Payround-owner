@@ -1492,6 +1492,21 @@ export default function OwnerPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSupport?.id]);
 
+  // 🤖🔇 Silence/allow the auto-reply bot for ONE conversation (report matters are human-only)
+  const toggleSupportBotMute = async () => {
+    if (!activeSupport || busy) return;
+    const next = !activeSupport.bot_muted;
+    try {
+      const { error } = await supabase.from('support_threads').update({ bot_muted: next }).eq('id', activeSupport.id);
+      if (error) throw error;
+      setActiveSupport(prev => prev ? { ...prev, bot_muted: next } : prev);
+      setSupportThreads(prev => prev.map(x => x.id === activeSupport.id ? { ...x, bot_muted: next } : x));
+      setMsg(next
+        ? '🤖🔇 Bot silenced for this conversation — only you reply here now.'
+        : '🤖 Bot re-enabled for this conversation — it may auto-answer while you are offline.');
+    } catch (e) { setErr(`Could not update the bot setting: ${e.message}`); }
+  };
+
   const sendSupportReply = async () => {
     const text = supReply.trim();
     if (!text || !activeSupport || supBusy) return;
@@ -2466,6 +2481,7 @@ export default function OwnerPanel() {
                           <span className="flex items-center gap-2 text-sm font-semibold text-gray-900">
                             <span className="truncate">{t.user_name || t.user_email}</span>
                             {!t.owner_read && <span className="text-[10px] bg-red-500 text-white px-1.5 py-0.5 rounded-full shrink-0">NEW</span>}
+                            {t.bot_muted && <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-full shrink-0" title="Report-related conversation — the bot stays silent; only you reply.">🤖🔇 human-only</span>}
                             <span className="ml-auto text-[10px] font-normal text-gray-400 shrink-0">{t.last_at ? new Date(t.last_at).toLocaleString() : ''}</span>
                           </span>
                           <span className="block text-xs text-gray-500 truncate">{t.last_message || '—'}</span>
@@ -2482,8 +2498,14 @@ export default function OwnerPanel() {
                       <p className="text-sm font-bold text-gray-900 truncate">{activeSupport.user_name || activeSupport.user_email}</p>
                       <p className="text-[10px] text-gray-400 truncate">{activeSupport.user_email}</p>
                     </div>
-                    <button disabled={busy} onClick={viewSupportProfileFull} className="ml-auto text-[11px] font-bold border border-gray-300 bg-white px-3 py-1.5 rounded-full hover:bg-gray-100 shrink-0 disabled:opacity-60">👁 Full Profile</button>
+                    <button disabled={busy} onClick={toggleSupportBotMute} title={activeSupport.bot_muted ? 'The bot is silent in this chat (report matter). Tap to allow bot auto-replies again.' : 'Tap to silence the bot in this chat — only you will reply (use for report matters).'} className={`ml-auto text-[11px] font-bold border px-3 py-1.5 rounded-full shrink-0 disabled:opacity-60 ${activeSupport.bot_muted ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100' : 'border-gray-300 bg-white hover:bg-gray-100'}`}>{activeSupport.bot_muted ? '🤖🔇 Bot muted' : '🤖 Bot on'}</button>
+                    <button disabled={busy} onClick={viewSupportProfileFull} className="text-[11px] font-bold border border-gray-300 bg-white px-3 py-1.5 rounded-full hover:bg-gray-100 shrink-0 disabled:opacity-60">👁 Full Profile</button>
                   </div>
+                  {activeSupport.bot_muted && (
+                    <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-[11px] text-amber-900">
+                      🤖🔇 <b>Bot silenced for this conversation</b> — this user was contacted about a report, so the auto-reply bot will not answer them. Reply personally below.
+                    </div>
+                  )}
 
                   {/* 👤 PROFILE PEEK — who you're chatting with, visible the whole time */}
                   {(supProfileLoading || supProfile) && (
