@@ -1147,6 +1147,15 @@ export default function OwnerPanel() {
     else setErr('The reported group is no longer available. The report remains in the private audit queue.');
   };
 
+  // 👤 Open the full user profile of a group's admin (e.g. while reviewing a
+  // submitted group — see their KYC, groups, reports tally, everything)
+  const openGroupAdminProfile = (g) => {
+    const em = (g?.admin_email || '').toLowerCase();
+    const admin = usersList.find(u => (u.email || '').toLowerCase() === em);
+    if (admin) openUserProfile(admin);
+    else setErr(`No registered user profile found for ${g?.admin_email || 'this admin'}.`);
+  };
+
   // 👁 Open the REPORTER's full profile (owner-only — never reveal to the reported party)
   const openReporterProfile = (report) => {
     const reporter = usersList.find(u =>
@@ -1929,7 +1938,8 @@ export default function OwnerPanel() {
                       {g.plan_months && <div className="text-[11px] mt-1 font-medium text-purple-700">Plan: {g.plan_months} month{g.plan_months > 1 ? 's' : ''} — receipt should be ₦{Number(g.plan_price || 0).toLocaleString()}</div>}
                       {!g.plan_months && <div className="text-[11px] mt-1 text-gray-400">Plan: legacy — check receipt amount</div>}
                       <div className="flex flex-wrap gap-2 mt-3">
-                        <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
+                        <button onClick={() => setProfileView({ type: 'group', data: g })} className="text-xs border rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Group</button>
+                        <button onClick={() => openGroupAdminProfile(g)} className="text-xs border border-purple-200 text-purple-700 bg-purple-50 rounded-full px-3 py-1.5 hover:bg-purple-100 font-medium">👤 View Admin Profile</button>
                         <button disabled={busy} onClick={() => approveGroup(g)} className="bg-black hover:bg-gray-800 text-white px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✔ Approve → Go Live</button>
                         <button disabled={busy} onClick={() => declineGroup(g)} className="bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 px-3 py-1.5 rounded-full text-xs disabled:opacity-60">✖ Decline</button>
                       </div>
@@ -3071,6 +3081,7 @@ export default function OwnerPanel() {
             <div className="text-xs font-bold text-gray-500 mb-1">ADMIN</div>
             {infoRow('Name', g.admin_name)}
             {infoRow('Email', g.admin_email)}
+            <button onClick={() => openGroupAdminProfile(g)} className="mt-1 mb-2 text-xs border border-purple-200 text-purple-700 bg-purple-50 rounded-full px-3 py-1.5 hover:bg-purple-100 font-bold">👤 View Admin's Full Profile</button>
             <div className="text-[11px] text-gray-400 mt-1 mb-3">Everyone can see the group admin. Admins can also join other groups as members. Group announcements are controlled by the admin only; admins must review a member's profile before approving them.</div>
 
             <div className="text-xs font-bold text-gray-500 mb-1">KYC & PAYMENT EVIDENCE</div>
