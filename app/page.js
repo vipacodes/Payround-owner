@@ -942,6 +942,24 @@ export default function OwnerPanel() {
     setBusy(false);
   };
 
+  // ⚡ Skip the rest of the 7-day recovery window: purge a QUEUED account right now.
+  const ownerPurgeQueuedNow = async (u) => {
+    if (!u?.id) return;
+    if (!window.confirm(`⚡ Delete ${u.name || u.email} IMMEDIATELY?\n\nThis skips the rest of the 7-day recovery window and permanently erases the account, groups, chats, payments and login RIGHT NOW.\n\nThis cannot be undone.`)) return;
+    const typed = window.prompt(`Type DELETE to confirm the immediate permanent deletion of ${u.email}:`);
+    if ((typed || '').trim().toUpperCase() !== 'DELETE') { setErr('Immediate deletion cancelled — you did not type DELETE.'); return; }
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { data, error } = await supabase.rpc('owner_purge_queued_account', { p_user_id: u.id });
+      if (error) throw error;
+      if (!data?.purged) throw new Error('The account could not be purged.');
+      setMsg(`⚡ ${data.email} permanently deleted right now (was queued as “deleted by ${data.was_deleted_by === 'owner' ? 'PayRound' : 'user'}”).`);
+      setProfileView(null);
+      await loadData();
+    } catch (e) { setErr(`Immediate deletion failed: ${e.message}`); }
+    setBusy(false);
+  };
+
   const ownerDeleteGroup = async (g) => {
     if (!g?.id) return;
     if (!window.confirm(`Delete group "${g.name || g.id}" forever?\n\nMembers, chat, payments and the group page all go. This cannot be undone.`)) return;
@@ -2111,6 +2129,7 @@ export default function OwnerPanel() {
                       <div className="flex flex-wrap gap-2 mt-2">
                         <button onClick={() => openUserProfile(u)} className="text-xs border bg-white rounded-full px-3 py-1.5 hover:bg-gray-50 font-medium">👁 View Profile</button>
                         {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="text-xs font-bold text-white bg-emerald-600 rounded-full px-3 py-1.5 hover:bg-emerald-700 disabled:opacity-60">♻️ Restore Account</button>}
+                        <button disabled={busy} onClick={() => ownerPurgeQueuedNow(u)} className="text-xs font-bold text-white bg-red-600 rounded-full px-3 py-1.5 hover:bg-red-700 disabled:opacity-60" title="Skip the rest of the 7-day window and permanently erase this account right now.">⚡ Delete Now</button>
                       </div>
                     </div>
                   )) : <div className="md:col-span-2 text-xs text-gray-500 border border-dashed rounded-xl p-8 text-center">{userSearch ? `No queued accounts match "${userSearch}".` : 'No accounts are queued for deletion.'}</div>
@@ -3188,7 +3207,10 @@ export default function OwnerPanel() {
               <p className="text-xs text-amber-900 mt-1">The user requested deletion, but all account data is still preserved during the seven-day recovery period.</p>
             )}
             <div className={`text-[10px] mt-1 ${u.deletion_deleted_by === 'owner' ? 'text-red-800' : 'text-amber-800'}`}>Permanent deletion: {u.deletion_scheduled_for ? new Date(u.deletion_scheduled_for).toLocaleString() : '—'} · {u.deletion_deleted_by === 'owner' ? 'Deleted' : 'Requested'}: {u.deletion_requested_at ? new Date(u.deletion_requested_at).toLocaleString() : '—'}</div>
-            {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account & Cancel Deletion</button>}
+            <div className="flex flex-wrap gap-2 mt-2">
+              {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account & Cancel Deletion</button>}
+              <button disabled={busy} onClick={() => ownerPurgeQueuedNow(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60" title="Skip the rest of the 7-day window and permanently erase this account right now.">⚡ Delete Now (skip 7 days)</button>
+            </div>
           </div>
         )}
 
@@ -3336,7 +3358,10 @@ export default function OwnerPanel() {
             {u.is_frozen ? '🔥 Unfreeze User' : '❄️ Freeze User'}
           </button>
           {isDeletionQueued(u) ? (
-            u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account</button>
+            <>
+              {u.deletion_can_restore && <button disabled={busy} onClick={() => ownerRestoreAccountDeletion(u)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">♻️ Restore Account</button>}
+              <button disabled={busy} onClick={() => ownerPurgeQueuedNow(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60" title="Skip the rest of the 7-day window and permanently erase this account right now.">⚡ Delete Now</button>
+            </>
           ) : (
             <button disabled={busy} onClick={() => ownerDeleteUser(u)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-full text-xs font-bold disabled:opacity-60">🗑 Delete Account (7-day queue)</button>
           )}
