@@ -984,7 +984,8 @@ export default function OwnerPanel() {
   const approveGroup = async (g) => {
     setBusy(true);
     try {
-      const { error } = await supabase.from('groups').update({ status: 'active' }).eq('id', g.id);
+      // 🥉 Every newly approved group starts with the bronze badge
+      const { error } = await supabase.from('groups').update({ status: 'active', badge_tier: g.badge_tier || 'bronze' }).eq('id', g.id);
       if (error) throw error;
       await notify('group_approved', g.id, `Group "${g.name}" approved and is now live.`, g.admin_email);
       setMsg(`"${g.name}" approved — now live on the user site. (⭐ verification badge is separate — set it in the Verification tab.)`);
